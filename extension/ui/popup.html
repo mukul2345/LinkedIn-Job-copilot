@@ -1,0 +1,530 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>JobPilot AI</title>
+  <link rel="stylesheet" href="popup.css">
+  <!-- Firebase SDK (bundled locally for MV3 compliance) -->
+  <script src="../assets/lib/firebase-app-compat.js"></script>
+  <script src="../assets/lib/firebase-auth-compat.js"></script>
+  <script src="../assets/lib/firebase-firestore-compat.js"></script>
+  <script src="../assets/lib/firebase-functions-compat.js"></script>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>⚡ JobPilot AI</h1>
+      <p class="subtitle">Auto-apply to jobs. Message recruiters. Land interviews.</p>
+    </header>
+
+    <!-- Auth Screen: Login -->
+    <section id="authLogin" class="tab-content active">
+      <div class="onboarding-card">
+        <h2>Welcome back</h2>
+        <p class="hint">Sign in to access your saved settings and start applying.</p>
+
+        <div class="form-group">
+          <label for="loginEmail">Email</label>
+          <input type="email" id="loginEmail" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" placeholder="••••••••">
+        </div>
+
+        <div class="auth-status" id="loginStatus"></div>
+
+        <button id="loginBtn" class="btn btn-primary">Sign In</button>
+
+        <div class="auth-links">
+          <a href="#" id="showForgotPassword">Forgot password?</a>
+          <span>·</span>
+          <a href="#" id="showSignup">Create account</a>
+        </div>
+
+        <div class="divider"><span>or</span></div>
+        <button id="googleLoginBtn" class="btn btn-secondary btn-google">
+          <svg width="16" height="16" viewBox="0 0 24 24" style="vertical-align: middle; margin-right: 8px;">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+          </svg>
+          Continue with Google
+        </button>
+      </div>
+    </section>
+
+    <!-- Auth Screen: Signup -->
+    <section id="authSignup" class="tab-content">
+      <div class="onboarding-card">
+        <h2>Create your account</h2>
+        <p class="hint">Start auto-applying to jobs in minutes.</p>
+
+        <div class="form-group">
+          <label for="signupName">Full Name</label>
+          <input type="text" id="signupName" placeholder="John Doe">
+        </div>
+        <div class="form-group">
+          <label for="signupEmail">Email</label>
+          <input type="email" id="signupEmail" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="signupPassword">Password</label>
+          <input type="password" id="signupPassword" placeholder="Min 6 characters">
+        </div>
+
+        <div class="auth-status" id="signupStatus"></div>
+
+        <button id="signupBtn" class="btn btn-primary">Create Account</button>
+
+        <div class="auth-links">
+          <a href="#" id="showLoginFromSignup">Already have an account? Sign in</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- Auth Screen: Forgot Password -->
+    <section id="authForgot" class="tab-content">
+      <div class="onboarding-card">
+        <h2>Reset your password</h2>
+        <p class="hint">Enter your email and we'll send you a reset link.</p>
+
+        <div class="form-group">
+          <label for="forgotEmail">Email</label>
+          <input type="email" id="forgotEmail" placeholder="you@example.com">
+        </div>
+
+        <div class="auth-status" id="forgotStatus"></div>
+
+        <button id="forgotBtn" class="btn btn-primary">Send Reset Link</button>
+
+        <div class="auth-links">
+          <a href="#" id="showLoginFromForgot">← Back to sign in</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- LinkedIn Credentials (shown after auth, before main app) -->
+    <section id="onboarding" class="tab-content">
+      <div class="onboarding-card">
+        <h2>👋 Welcome to JobPilot AI</h2>
+        <p class="hint">Enter your LinkedIn credentials to enable auto-login. They're stored locally in your browser — never sent to any server.</p>
+        
+        <div class="form-group">
+          <label for="linkedinEmail">LinkedIn Email *</label>
+          <input type="email" id="linkedinEmail" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="linkedinPassword">LinkedIn Password *</label>
+          <input type="password" id="linkedinPassword" placeholder="••••••••">
+          <small>🔒 Stored locally only — never uploaded</small>
+        </div>
+
+        <div class="login-status" id="linkedinLoginStatus"></div>
+
+        <button id="saveLoginBtn" class="btn btn-primary">Save & Continue →</button>
+        
+        <div class="divider"><span>or</span></div>
+        <button id="skipLoginBtn" class="btn btn-secondary">I'll log in manually</button>
+      </div>
+    </section>
+
+    <!-- Main App (hidden until authenticated) -->
+    <div id="mainApp" style="display: none;">
+
+    <!-- Navigation Tabs -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="status">Status</button>
+      <button class="tab" data-tab="profile">Profile</button>
+      <button class="tab" data-tab="search">Search</button>
+      <button class="tab" data-tab="questions">Q&A</button>
+      <button class="tab" data-tab="pricing">Pricing</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <!-- Status Tab -->
+    <section id="status" class="tab-content active">
+      <div class="status-card">
+        <div class="status-indicator" id="statusIndicator">
+          <span class="dot"></span>
+          <span id="statusText">Idle</span>
+        </div>
+        <div class="stats">
+          <div class="stat"><span class="stat-value" id="appliedCount">0</span><span class="stat-label">Applied</span></div>
+          <div class="stat"><span class="stat-value" id="skippedCount">0</span><span class="stat-label">Skipped</span></div>
+          <div class="stat"><span class="stat-value" id="failedCount">0</span><span class="stat-label">Failed</span></div>
+        </div>
+      </div>
+      <div class="actions">
+        <button id="startBtn" class="btn btn-primary">▶ Start Applying</button>
+        <button id="stopBtn" class="btn btn-danger" disabled>⏹ Stop</button>
+      </div>
+      <div class="actions">
+        <button id="messageHRsBtn" class="btn btn-secondary">💬 Message HRs</button>
+        <button id="stopHRBtn" class="btn btn-danger" disabled>⏹ Stop HR Messages</button>
+      </div>
+      <div id="hrStatus" class="hint" style="margin-top:4px;"></div>
+      <div class="log-section">
+        <h3>Activity Log</h3>
+        <div id="logContainer" class="log-container">
+          <p class="log-empty">No activity yet. Configure your profile and start applying!</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Profile Tab -->
+    <section id="profile" class="tab-content">
+      <h2>Personal Information</h2>
+      <div class="form-group">
+        <label for="firstName">First Name *</label>
+        <input type="text" id="firstName" placeholder="John">
+      </div>
+      <div class="form-group">
+        <label for="middleName">Middle Name</label>
+        <input type="text" id="middleName" placeholder="">
+      </div>
+      <div class="form-group">
+        <label for="lastName">Last Name *</label>
+        <input type="text" id="lastName" placeholder="Doe">
+      </div>
+      <div class="form-group">
+        <label for="phoneNumber">Phone Number *</label>
+        <input type="tel" id="phoneNumber" placeholder="9876543210">
+      </div>
+      <div class="form-group">
+        <label for="currentCity">Current City</label>
+        <input type="text" id="currentCity" placeholder="Bangalore">
+      </div>
+      <div class="form-group">
+        <label for="street">Street Address</label>
+        <input type="text" id="street" placeholder="123 Main St">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label for="state">State</label>
+          <input type="text" id="state" placeholder="Karnataka">
+        </div>
+        <div class="form-group">
+          <label for="zipcode">Zipcode</label>
+          <input type="text" id="zipcode" placeholder="560035">
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="country">Country</label>
+        <input type="text" id="country" placeholder="India">
+      </div>
+
+      <h2>Equal Opportunity</h2>
+      <div class="form-group">
+        <label for="ethnicity">Ethnicity</label>
+        <select id="ethnicity">
+          <option value="Decline">Decline to self-identify</option>
+          <option value="Hispanic/Latino">Hispanic/Latino</option>
+          <option value="American Indian or Alaska Native">American Indian or Alaska Native</option>
+          <option value="Asian">Asian</option>
+          <option value="Black or African American">Black or African American</option>
+          <option value="Native Hawaiian or Other Pacific Islander">Native Hawaiian or Other Pacific Islander</option>
+          <option value="White">White</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="gender">Gender</label>
+        <select id="gender">
+          <option value="Decline">Decline to self-identify</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+          <option value="Other">Other</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="disabilityStatus">Disability Status</label>
+        <select id="disabilityStatus">
+          <option value="Decline">Decline to self-identify</option>
+          <option value="Yes">Yes</option>
+          <option value="No">No</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="veteranStatus">Veteran Status</label>
+        <select id="veteranStatus">
+          <option value="Decline">Decline to self-identify</option>
+          <option value="Yes">Yes</option>
+          <option value="No">No</option>
+        </select>
+      </div>
+      <button id="saveProfile" class="btn btn-primary">Save Profile</button>
+    </section>
+
+    <!-- Search Tab -->
+    <section id="search" class="tab-content">
+      <h2>Job Search Preferences</h2>
+      <div class="form-group">
+        <label for="searchTerms">Search Terms (one per line) *</label>
+        <textarea id="searchTerms" rows="4" placeholder="Backend Developer&#10;Software Engineer&#10;Node.js Developer"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="searchLocation">Location</label>
+        <input type="text" id="searchLocation" placeholder="India">
+      </div>
+      <div class="form-group">
+        <label for="datePosted">Date Posted</label>
+        <select id="datePosted">
+          <option value="">Any time</option>
+          <option value="Past month">Past month</option>
+          <option value="Past week" selected>Past week</option>
+          <option value="Past 24 hours">Past 24 hours</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="experienceLevel">Experience Level (comma-separated)</label>
+        <input type="text" id="experienceLevel" placeholder="Entry level, Mid-Senior level">
+      </div>
+      <div class="form-group">
+        <label for="jobType">Job Type (comma-separated)</label>
+        <input type="text" id="jobType" placeholder="Full-time, Contract">
+      </div>
+      <div class="form-group">
+        <label for="workStyle">Work Style (comma-separated)</label>
+        <input type="text" id="workStyle" placeholder="Remote, Hybrid, On-site">
+      </div>
+      <div class="form-group checkbox-group">
+        <input type="checkbox" id="easyApplyOnly" checked>
+        <label for="easyApplyOnly">Easy Apply Only</label>
+      </div>
+
+      <h2>Skip Criteria</h2>
+      <div class="form-group">
+        <label for="badWords">Skip jobs with these words in description (one per line)</label>
+        <textarea id="badWords" rows="3" placeholder="US Citizen&#10;No C2C&#10;.NET"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="blacklistCompanies">Blacklist Companies (one per line)</label>
+        <textarea id="blacklistCompanies" rows="2" placeholder="Crossover&#10;Staffing Company"></textarea>
+      </div>
+      <div class="form-group">
+        <label for="currentExperience">Your Current Experience (years)</label>
+        <input type="number" id="currentExperience" value="3" min="-1">
+        <small>Set -1 to apply regardless of required experience</small>
+      </div>
+      <div class="form-group">
+        <label for="switchNumber">Max applications per search term</label>
+        <input type="number" id="switchNumber" value="30" min="1">
+      </div>
+      <button id="saveSearch" class="btn btn-primary">Save Search Preferences</button>
+    </section>
+
+    <!-- Questions Tab -->
+    <section id="questions" class="tab-content">
+      <h2>Application Answers</h2>
+      <p class="hint">These answers will be used to fill Easy Apply forms automatically.</p>
+      
+      <div class="form-group">
+        <label for="yearsOfExperience">Years of Experience</label>
+        <input type="text" id="yearsOfExperience" placeholder="3">
+      </div>
+      <div class="form-group">
+        <label for="requireVisa">Require Visa Sponsorship?</label>
+        <select id="requireVisa">
+          <option value="No">No</option>
+          <option value="Yes">Yes</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="website">Portfolio/Website URL</label>
+        <input type="url" id="website" placeholder="https://github.com/yourname">
+      </div>
+      <div class="form-group">
+        <label for="linkedInUrl">LinkedIn Profile URL</label>
+        <input type="url" id="linkedInUrl" placeholder="https://www.linkedin.com/in/yourname">
+      </div>
+      <div class="form-group">
+        <label for="usCitizenship">Citizenship Status</label>
+        <select id="usCitizenship">
+          <option value="Other">Other</option>
+          <option value="U.S. Citizen/Permanent Resident">U.S. Citizen/Permanent Resident</option>
+          <option value="Non-citizen allowed to work for any employer">Non-citizen allowed to work for any employer</option>
+          <option value="Non-citizen allowed to work for current employer">Non-citizen allowed to work for current employer</option>
+          <option value="Non-citizen seeking work authorization">Non-citizen seeking work authorization</option>
+          <option value="Canadian Citizen/Permanent Resident">Canadian Citizen/Permanent Resident</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="desiredSalary">Desired Salary (annual, numbers only)</label>
+        <input type="number" id="desiredSalary" placeholder="2500000">
+      </div>
+      <div class="form-group">
+        <label for="currentCtc">Current CTC (annual, numbers only)</label>
+        <input type="number" id="currentCtc" placeholder="1600000">
+      </div>
+      <div class="form-group">
+        <label for="noticePeriod">Notice Period (days)</label>
+        <input type="number" id="noticePeriod" placeholder="60">
+      </div>
+      <div class="form-group">
+        <label for="recentEmployer">Most Recent Employer</label>
+        <input type="text" id="recentEmployer" placeholder="Company Name">
+      </div>
+      <div class="form-group">
+        <label for="confidenceLevel">Confidence Level (1-10)</label>
+        <input type="number" id="confidenceLevel" min="1" max="10" placeholder="8">
+      </div>
+      <div class="form-group">
+        <label for="linkedinHeadline">LinkedIn Headline</label>
+        <input type="text" id="linkedinHeadline" placeholder="Software Engineer @ Company">
+      </div>
+      <div class="form-group">
+        <label for="linkedinSummary">Professional Summary</label>
+        <textarea id="linkedinSummary" rows="4" placeholder="Brief professional summary..."></textarea>
+      </div>
+      <div class="form-group">
+        <label for="coverLetter">Cover Letter Template</label>
+        <textarea id="coverLetter" rows="6" placeholder="Dear Hiring Manager..."></textarea>
+      </div>
+      <button id="saveQuestions" class="btn btn-primary">Save Answers</button>
+    </section>
+
+    <!-- Pricing Tab -->
+    <section id="pricing" class="tab-content">
+      <div id="pricingContent"></div>
+    </section>
+
+    <!-- Settings Tab -->
+    <section id="settings" class="tab-content">
+      <h2>Your Account</h2>
+      <div class="account-card" id="userAccountCard">
+        <div class="account-info">
+          <span class="account-email" id="userDisplayName">User</span>
+          <span class="account-badge" id="userPlanBadge">Free</span>
+        </div>
+        <div class="account-meta">
+          <span class="account-id" id="userIdDisplay"></span>
+        </div>
+        <button id="logoutBtn" class="btn btn-danger btn-sm">Logout</button>
+      </div>
+
+      <h2>LinkedIn Account</h2>
+      <div class="account-card" id="accountCard">
+        <div class="account-info">
+          <span class="account-email" id="accountEmail">Not configured</span>
+          <span class="account-badge" id="accountBadge">●</span>
+        </div>
+        <button id="changeLoginBtn" class="btn btn-secondary btn-sm">Change Credentials</button>
+      </div>
+      <div id="changeLoginForm" style="display: none;">
+        <div class="form-group">
+          <label for="updateEmail">LinkedIn Email</label>
+          <input type="email" id="updateEmail" placeholder="you@example.com">
+        </div>
+        <div class="form-group">
+          <label for="updatePassword">LinkedIn Password</label>
+          <input type="password" id="updatePassword" placeholder="••••••••">
+        </div>
+        <button id="updateLoginBtn" class="btn btn-primary btn-sm">Update</button>
+      </div>
+
+      <h2>Activity Tracking</h2>
+      <div class="activity-summary" id="activitySummary">
+        <div class="activity-row"><span>Total Sessions</span><span id="totalSessions">0</span></div>
+        <div class="activity-row"><span>Total Applied</span><span id="totalApplied">0</span></div>
+        <div class="activity-row"><span>Last Active</span><span id="lastActive">Never</span></div>
+      </div>
+
+      <h2>Bot Settings</h2>
+      <div class="form-group checkbox-group">
+        <input type="checkbox" id="pauseBeforeSubmit" checked>
+        <label for="pauseBeforeSubmit">Pause before submitting (review mode)</label>
+      </div>
+      <div class="form-group checkbox-group">
+        <input type="checkbox" id="followCompanies">
+        <label for="followCompanies">Follow companies after applying</label>
+      </div>
+      <div class="form-group checkbox-group">
+        <input type="checkbox" id="messageRecruiter" checked>
+        <label for="messageRecruiter">Message recruiter/hiring manager after applying</label>
+      </div>
+      <div class="form-group">
+        <label for="clickGap">Delay between actions (seconds)</label>
+        <input type="number" id="clickGap" value="2" min="0" max="10">
+      </div>
+
+      <h2>AI Settings (Optional)</h2>
+      <div class="form-group checkbox-group">
+        <input type="checkbox" id="useAI">
+        <label for="useAI">Use AI for answering unknown questions</label>
+      </div>
+      <div class="form-group">
+        <label for="aiProvider">AI Provider</label>
+        <select id="aiProvider">
+          <option value="openai">OpenAI / Compatible</option>
+          <option value="gemini">Google Gemini</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label for="aiApiUrl">AI API URL</label>
+        <input type="url" id="aiApiUrl" placeholder="https://api.openai.com/v1/">
+      </div>
+      <div class="form-group">
+        <label for="aiApiKey">AI API Key</label>
+        <input type="password" id="aiApiKey" placeholder="sk-...">
+      </div>
+      <div class="form-group">
+        <label for="aiModel">AI Model</label>
+        <input type="text" id="aiModel" placeholder="gpt-4o-mini">
+      </div>
+
+      <h2>HR Outreach Settings</h2>
+      <div class="form-group">
+        <label for="hrMessageTemplate">Message Template</label>
+        <textarea id="hrMessageTemplate" rows="5" placeholder="Hi {name}, I'm a Backend Developer with 3+ years of experience..."></textarea>
+        <small>Use {name} for recruiter's first name</small>
+      </div>
+      <div class="form-group">
+        <label for="hrDailyLimit">Max messages per day</label>
+        <input type="number" id="hrDailyLimit" value="25" min="1" max="50">
+        <small>LinkedIn recommends &lt;50 messages/day. Stay under 25 to be safe.</small>
+      </div>
+      <div class="form-group">
+        <label for="hrDelayBetween">Delay between messages (seconds)</label>
+        <input type="number" id="hrDelayBetween" value="60" min="30" max="300">
+        <small>Minimum 30 seconds. Higher = safer.</small>
+      </div>
+
+      <h2>Data</h2>
+      <button id="exportData" class="btn btn-secondary">📥 Export Application History</button>
+      <button id="clearData" class="btn btn-danger">🗑 Clear All Data</button>
+      <button id="saveSettings" class="btn btn-primary">Save Settings</button>
+    </section>
+
+    </div><!-- end #mainApp -->
+
+    <footer>
+      <div class="footer-brand">
+        <span class="footer-logo">⚡</span>
+        <span class="footer-name">JobPilot AI</span>
+        <span class="footer-version">v1.3.0</span>
+      </div>
+      <p class="footer-links">
+        <a href="#" id="feedbackLink">Feedback</a>
+        <span>·</span>
+        <a href="https://jobpilot.ai" target="_blank">Website</a>
+      </p>
+      <p class="footer-credit">Built by <a href="https://www.linkedin.com/in/mukul---gupta/" target="_blank">Mukul Gupta</a></p>
+    </footer>
+  </div>
+  <script src="../core/constants.js"></script>
+  <script src="../core/firebase.js"></script>
+  <script src="../modules/auth/auth-service.js"></script>
+  <script src="../modules/database/user-repository.js"></script>
+  <script src="../modules/database/sync-service.js"></script>
+  <script src="../modules/subscription/plan-config.js"></script>
+  <script src="../modules/database/usage-repository.js"></script>
+  <script src="../modules/subscription/plan-service.js"></script>
+  <script src="../modules/subscription/payment-service.js"></script>
+  <script src="screens/pricing-screen.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>

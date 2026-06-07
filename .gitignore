@@ -1,0 +1,29 @@
+__pycache__
+.vscode
+.idea
+
+all excels
+all resumes
+logs
+
+old
+
+secrets.py
+config/personals.py
+.venv
+apikeys.py
+
+# Node.js
+node_modules/
+coverage/
+.DS_Store
+
+# Firebase service account (NEVER commit this)
+scripts/service-account-key.json
+service-account-key.json
+
+# Cloud Functions secrets
+functions/.env
+
+# Build artifacts
+jobpilot-extension.zip

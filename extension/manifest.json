@@ -1,0 +1,60 @@
+{
+  "manifest_version": 3,
+  "name": "JobPilot AI - LinkedIn Auto Job Applier",
+  "version": "1.3.0",
+  "description": "Auto-apply to LinkedIn jobs, message HR/recruiters, and land interviews faster with AI-powered automation.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "tabs",
+    "notifications",
+    "identity"
+  ],
+  "host_permissions": [
+    "https://www.linkedin.com/*",
+    "https://www.googleapis.com/*",
+    "https://firestore.googleapis.com/*",
+    "https://identitytoolkit.googleapis.com/*",
+    "https://securetoken.googleapis.com/*",
+    "https://us-central1-linkedin-jobcopilot.cloudfunctions.net/*"
+  ],
+  "action": {
+    "default_popup": "ui/popup.html",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background/service-worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": [
+        "core/constants.js",
+        "modules/subscription/plan-config.js",
+        "modules/database/usage-repository.js",
+        "modules/subscription/plan-service.js",
+        "modules/bot/utils.js",
+        "modules/bot/selectors.js",
+        "ui/components/upgrade-modal.js",
+        "modules/bot/form-filler.js",
+        "modules/bot/hr-outreach.js",
+        "modules/bot/recruiter-msg.js",
+        "modules/bot/job-processor.js",
+        "modules/bot/safety.js",
+        "modules/bot/bot-core.js",
+        "content/content.js"
+      ],
+      "css": ["content/content.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  }
+}

@@ -1,0 +1,95 @@
+/* Confirmation overlay for pause-before-submit */
+#lja-confirm-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999999;
+}
+
+.lja-confirm-box {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px 32px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+  text-align: center;
+  max-width: 400px;
+}
+
+.lja-confirm-box p {
+  font-size: 16px;
+  color: #333;
+  margin-bottom: 20px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.lja-confirm-actions {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+}
+
+.lja-confirm-actions button {
+  padding: 10px 24px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+#lja-confirm-yes {
+  background: #0a66c2;
+  color: #fff;
+}
+
+#lja-confirm-yes:hover {
+  background: #004182;
+}
+
+#lja-confirm-no {
+  background: #e9ecef;
+  color: #333;
+}
+
+#lja-confirm-no:hover {
+  background: #dee2e6;
+}
+
+/* Bot status indicator on LinkedIn page */
+.lja-status-badge {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  background: #0a66c2;
+  color: #fff;
+  padding: 8px 16px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: 600;
+  z-index: 99999;
+  box-shadow: 0 4px 12px rgba(10, 102, 194, 0.4);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+.lja-status-badge .lja-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #28a745;
+  animation: lja-pulse 1.5s infinite;
+}
+
+@keyframes lja-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(0.8); }
+}
