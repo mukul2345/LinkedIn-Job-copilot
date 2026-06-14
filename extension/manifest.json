@@ -1,23 +1,39 @@
 {
   "manifest_version": 3,
   "name": "JobPilot AI - LinkedIn Auto Job Applier",
-  "version": "1.3.0",
+  "version": "2.0.0",
   "description": "Auto-apply to LinkedIn jobs, message HR/recruiters, and land interviews faster with AI-powered automation.",
   "permissions": [
     "storage",
-    "activeTab",
     "tabs",
     "notifications",
-    "identity"
+    "identity",
+    "alarms"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",
+    "https://www.naukri.com/*",
+    "https://www.indeed.com/*",
+    "https://*.indeed.com/*",
+    "https://www.glassdoor.com/*",
+    "https://*.glassdoor.com/*",
+    "https://*.workday.com/*",
+    "https://angel.co/*",
+    "https://wellfound.com/*",
+    "https://*.lever.co/*",
+    "https://*.greenhouse.io/*",
+    "https://*.smartrecruiters.com/*",
     "https://www.googleapis.com/*",
+    "https://www.googleapis.com/gmail/v1/*",
     "https://firestore.googleapis.com/*",
     "https://identitytoolkit.googleapis.com/*",
     "https://securetoken.googleapis.com/*",
     "https://us-central1-linkedin-jobcopilot.cloudfunctions.net/*"
   ],
+  "oauth2": {
+    "client_id": "<GOOGLE_CLIENT_ID>.apps.googleusercontent.com",
+    "scopes": ["https://www.googleapis.com/auth/gmail.readonly"]
+  },
   "action": {
     "default_popup": "ui/popup.html",
     "default_icon": {
@@ -34,12 +50,26 @@
       "matches": ["https://www.linkedin.com/*"],
       "js": [
         "core/constants.js",
+        "modules/shared/types.js",
+        "modules/shared/api-client.js",
+        "modules/shared/validators.js",
+        "modules/shared/hash.js",
+        "modules/shared/filters.js",
+        "modules/search/search-service.js",
+        "modules/resume/resume-service.js",
+        "modules/fit-score/fit-score-service.js",
+        "modules/tracker/tracker-service.js",
+        "modules/tracker/tracker-ui.js",
+        "modules/visa/visa-service.js",
         "modules/subscription/plan-config.js",
+        "modules/database/cache-manager.js",
+        "modules/database/firestore-service.js",
         "modules/database/usage-repository.js",
         "modules/subscription/plan-service.js",
         "modules/bot/utils.js",
         "modules/bot/selectors.js",
         "ui/components/upgrade-modal.js",
+        "modules/ai/ai-service.js",
         "modules/bot/form-filler.js",
         "modules/bot/hr-outreach.js",
         "modules/bot/recruiter-msg.js",
@@ -49,6 +79,30 @@
         "content/content.js"
       ],
       "css": ["content/content.css"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://www.naukri.com/*",
+        "https://www.indeed.com/*",
+        "https://*.indeed.com/*",
+        "https://www.glassdoor.com/*",
+        "https://*.glassdoor.com/*",
+        "https://*.workday.com/*",
+        "https://angel.co/*",
+        "https://wellfound.com/*",
+        "https://*.lever.co/*",
+        "https://*.greenhouse.io/*",
+        "https://*.smartrecruiters.com/*"
+      ],
+      "js": [
+        "core/constants.js",
+        "modules/shared/api-client.js",
+        "modules/database/cache-manager.js",
+        "modules/ai/ai-service.js",
+        "content/job-board-helper.js"
+      ],
+      "css": ["content/job-board-helper.css"],
       "run_at": "document_idle"
     }
   ],

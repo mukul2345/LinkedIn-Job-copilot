@@ -66,7 +66,19 @@ function renderPricingPage() {
     <button id="subscribePro" class="btn btn-primary btn-subscribe">
       Subscribe to Pro →
     </button>
-    <p class="pricing-note">Secure payment via Cashfree. 0% fee on UPI. Cancel anytime.</p>
+
+    <div class="payment-provider-selector" style="margin-top: 12px; text-align: center;">
+      <label style="margin-right: 16px; cursor: pointer;">
+        <input type="radio" name="paymentProvider" value="cashfree" checked>
+        Cashfree (UPI/Cards)
+      </label>
+      <label style="cursor: pointer;">
+        <input type="radio" name="paymentProvider" value="razorpay">
+        Razorpay (UPI/Cards/NetBanking)
+      </label>
+    </div>
+
+    <p class="pricing-note">Secure payment. 0% fee on UPI. Cancel anytime.</p>
   `;
 
   // Attach subscribe button handler
@@ -78,7 +90,8 @@ function renderPricingPage() {
 
 /**
  * Handle the subscribe button click.
- * Creates a Cashfree payment session via Cloud Function and opens checkout.
+ * Creates a payment session via Cloud Function and opens checkout.
+ * Supports both Cashfree and Razorpay.
  */
 async function handleSubscribe() {
   const selectedPeriod = document.querySelector('input[name="pricingPeriod"]:checked')?.value;
@@ -86,6 +99,8 @@ async function handleSubscribe() {
     showNotification('Please select a plan period.', 'error');
     return;
   }
+
+  const selectedProvider = document.querySelector('input[name="paymentProvider"]:checked')?.value || 'cashfree';
 
   const pricing = getPricing(selectedPeriod);
   const user = getCurrentUser();
@@ -102,11 +117,11 @@ async function handleSubscribe() {
   }
 
   try {
-    const result = await initiatePayment(user, pricing);
+    const result = await initiatePayment(user, pricing, selectedProvider);
     if (result.success) {
-      showNotification(`Opening payment page for ${pricing.label} (₹${pricing.price})...`, 'info');
+      showNotification(`Opening ${selectedProvider} payment page for ${pricing.label} (₹${pricing.price})...`, 'info');
       if (subscribeBtn) {
-        subscribeBtn.textContent = 'Verifying payment...';
+        subscribeBtn.textContent = 'Payment opened — complete in new tab';
       }
     } else {
       showNotification(`Payment error: ${result.error}`, 'error');

@@ -78,6 +78,7 @@ async function messageRecruiter(jobTitle, company, config) {
     messageBtnInHiringSection.click();
 
     // Wait for message input to appear using the improved wait logic
+    // Reduced from 4s hardcoded wait — uses dynamic polling instead
     const msgBox = await waitForMessageInput();
 
     if (!msgBox) {
@@ -88,10 +89,15 @@ async function messageRecruiter(jobTitle, company, config) {
 
     // Type the message
     const message = buildRecruiterMessage(recruiterName, jobTitle, company, config);
+    if (!message) {
+      log('No recruiter message template configured. Skipping.', 'info');
+      pressEscape();
+      return;
+    }
     msgBox.focus();
-    await sleep(300);
+    await sleep(200);
     document.execCommand('insertText', false, message);
-    await sleep(800);
+    await sleep(500);
 
     // Click Send
     let sendBtn = null;
@@ -118,11 +124,31 @@ async function messageRecruiter(jobTitle, company, config) {
 }
 
 /**
- * Build a personalized recruiter message.
+ * Build a personalized recruiter message from user's template.
+ * If no template is configured, returns null (caller should skip messaging).
  */
 function buildRecruiterMessage(recruiterName, jobTitle, company, config) {
-  const myName = [config.firstName, config.lastName].filter(Boolean).join(' ');
-  const experience = config.yearsOfExperience || '3';
+  const templates = config.templates || {};
+  // Try recruiter-specific template first, fall back to HR template
+  const template = templates.recruiterMessage || templates.hrMessage || '';
 
-  return `Hi Team,\n\nI just applied for the ${jobTitle} role at ${company} and wanted to reach out directly. I have ${experience}+ years of backend development experience with Node.js, TypeScript, and AWS, and I believe my skills align well with this position.\n\nI'd love the opportunity to discuss how I can contribute to your team. Would you be open to a brief conversation?\n\nBest regards,\n${myName}`;
+  if (!template) {
+    // No template configured — return null so caller knows to skip
+    log('No recruiter/HR message template configured. Skipping post-apply message.', 'info');
+    return null;
+  }
+
+  const myName = [config.firstName, config.lastName].filter(Boolean).join(' ');
+  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '3';
+  const headline = config.linkedinHeadline || config.profile?.linkedinHeadline || '';
+
+  // Replace all supported placeholders
+  return template
+    .replace(/\{recruiterName\}/gi, recruiterName)
+    .replace(/\{name\}/gi, recruiterName)
+    .replace(/\{jobTitle\}/gi, jobTitle || '')
+    .replace(/\{company\}/gi, company || '')
+    .replace(/\{experience\}/gi, experience)
+    .replace(/\{headline\}/gi, headline)
+    .replace(/\{myName\}/gi, myName);
 }

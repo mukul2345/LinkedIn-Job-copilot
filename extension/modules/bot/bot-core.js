@@ -6,6 +6,8 @@
  */
 async function startBot(state) {
   if (state.botRunning) return;
+  if (state._startingBot) return; // Mutex: prevent concurrent start attempts
+  state._startingBot = true;
   state.botRunning = true;
   state.stopRequested = false;
 
@@ -15,6 +17,17 @@ async function startBot(state) {
   const config = await getStorage(null);
   state.config = config;
   state.applicationHistory = config.applicationHistory || [];
+
+  // Prune old application history to prevent unbounded growth
+  // Keep only last 30 days of history in local storage
+  const thirtyDaysAgo = new Date();
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const cutoff = thirtyDaysAgo.toISOString();
+  if (state.applicationHistory.length > 500) {
+    state.applicationHistory = state.applicationHistory.filter(
+      h => h.date && h.date > cutoff
+    );
+  }
 
   // Restore state if resuming after navigation
   if (config.botState) {
@@ -73,6 +86,7 @@ async function startBot(state) {
 function stopBot(state) {
   state.botRunning = false;
   state.stopRequested = true;
+  state._startingBot = false; // Release start mutex
   removeStatusBadge();
   log(`Bot stopped. Applied: ${state.appliedCount}, Skipped: ${state.skippedCount}, Failed: ${state.failedCount}`, 'info');
 
@@ -211,19 +225,29 @@ async function runSearchLoop(state) {
 
 /**
  * Save current bot state to chrome.storage for resume after navigation.
+ * Includes timeout to prevent hanging if extension context is invalidated.
  */
 async function saveState(state) {
-  await new Promise(resolve => {
-    chrome.storage.local.set({
-      botState: {
-        currentSearchIndex: state.currentSearchIndex,
-        appliedCount: state.appliedCount,
-        skippedCount: state.skippedCount,
-        failedCount: state.failedCount
-      },
-      applicationHistory: state.applicationHistory
-    }, resolve);
-  });
+  const timeoutMs = 5000;
+  await Promise.race([
+    new Promise(resolve => {
+      try {
+        chrome.storage.local.set({
+          botState: {
+            currentSearchIndex: state.currentSearchIndex,
+            appliedCount: state.appliedCount,
+            skippedCount: state.skippedCount,
+            failedCount: state.failedCount
+          },
+          applicationHistory: state.applicationHistory
+        }, resolve);
+      } catch (e) {
+        // Extension context invalidated
+        resolve();
+      }
+    }),
+    new Promise(resolve => setTimeout(resolve, timeoutMs))
+  ]);
 }
 
 /**

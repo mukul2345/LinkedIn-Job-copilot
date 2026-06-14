@@ -25,30 +25,61 @@ async function getTodayUsage() {
 
 /**
  * Increment the application count for today.
+ * Uses a locking mechanism to prevent race conditions.
  * @returns {Promise<number>} new count
  */
 async function incrementApplicationCount() {
-  const key = `usage_${getUsageDate()}`;
-  const usage = await getTodayUsage();
-  usage.applications = (usage.applications || 0) + 1;
-  await new Promise((resolve) => {
-    chrome.storage.local.set({ [key]: usage }, resolve);
-  });
-  return usage.applications;
+  return await atomicIncrement('applications');
 }
 
 /**
  * Increment the HR message count for today.
+ * Uses a locking mechanism to prevent race conditions.
  * @returns {Promise<number>} new count
  */
 async function incrementHRMessageCount() {
+  return await atomicIncrement('hrMessages');
+}
+
+/**
+ * Atomically increment a usage counter to prevent race conditions.
+ * Uses a simple lock key in storage to serialize concurrent updates.
+ * @param {'applications'|'hrMessages'} field
+ * @returns {Promise<number>} new count
+ */
+async function atomicIncrement(field) {
   const key = `usage_${getUsageDate()}`;
-  const usage = await getTodayUsage();
-  usage.hrMessages = (usage.hrMessages || 0) + 1;
-  await new Promise((resolve) => {
-    chrome.storage.local.set({ [key]: usage }, resolve);
-  });
-  return usage.hrMessages;
+  const lockKey = `_lock_${key}_${field}`;
+
+  // Simple spinlock — wait if another increment is in progress
+  let retries = 0;
+  while (retries < 10) {
+    const lockData = await new Promise(resolve => chrome.storage.local.get(lockKey, resolve));
+    if (!lockData[lockKey]) break;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    retries++;
+  }
+
+  // Acquire lock
+  await new Promise(resolve => chrome.storage.local.set({ [lockKey]: true }, resolve));
+
+  try {
+    // Read current value
+    const data = await new Promise(resolve => chrome.storage.local.get(key, resolve));
+    const usage = data[key] || { applications: 0, hrMessages: 0 };
+
+    // Increment
+    usage[field] = (usage[field] || 0) + 1;
+    const newCount = usage[field];
+
+    // Write back
+    await new Promise(resolve => chrome.storage.local.set({ [key]: usage }, resolve));
+
+    return newCount;
+  } finally {
+    // Release lock
+    await new Promise(resolve => chrome.storage.local.remove(lockKey, resolve));
+  }
 }
 
 /**

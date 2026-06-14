@@ -22,9 +22,17 @@ function waitForElement(selector, timeout = 10000) {
     const el = document.querySelector(selector);
     if (el) return resolve(el);
 
+    // Guard against document.body not being ready
+    if (!document.body) {
+      setTimeout(() => resolve(null), timeout);
+      return;
+    }
+
+    let resolved = false;
     const observer = new MutationObserver(() => {
       const el = document.querySelector(selector);
-      if (el) {
+      if (el && !resolved) {
+        resolved = true;
         observer.disconnect();
         resolve(el);
       }
@@ -33,8 +41,11 @@ function waitForElement(selector, timeout = 10000) {
     observer.observe(document.body, { childList: true, subtree: true });
 
     setTimeout(() => {
-      observer.disconnect();
-      resolve(null);
+      if (!resolved) {
+        resolved = true;
+        observer.disconnect();
+        resolve(null);
+      }
     }, timeout);
   });
 }
@@ -53,10 +64,18 @@ function waitForAnyElement(selectors, timeout = 10000) {
       if (el) return resolve(el);
     }
 
+    // Guard against document.body not being ready
+    if (!document.body) {
+      setTimeout(() => resolve(null), timeout);
+      return;
+    }
+
+    let resolved = false;
     const observer = new MutationObserver(() => {
       for (const sel of selectors) {
         const el = document.querySelector(sel);
-        if (el) {
+        if (el && !resolved) {
+          resolved = true;
           observer.disconnect();
           resolve(el);
           return;
@@ -67,8 +86,11 @@ function waitForAnyElement(selectors, timeout = 10000) {
     observer.observe(document.body, { childList: true, subtree: true });
 
     setTimeout(() => {
-      observer.disconnect();
-      resolve(null);
+      if (!resolved) {
+        resolved = true;
+        observer.disconnect();
+        resolve(null);
+      }
     }, timeout);
   });
 }
@@ -182,27 +204,42 @@ function getStorage(keys) {
 
 /**
  * Show a confirmation dialog overlay on the page.
+ * Uses textContent to prevent XSS from malicious job titles/company names.
  */
 function showConfirmDialog(message) {
   return new Promise((resolve) => {
     const overlay = document.createElement('div');
     overlay.id = 'lja-confirm-overlay';
-    overlay.innerHTML = `
-      <div class="lja-confirm-box">
-        <p>${message}</p>
-        <div class="lja-confirm-actions">
-          <button id="lja-confirm-yes">Submit</button>
-          <button id="lja-confirm-no">Skip</button>
-        </div>
-      </div>
-    `;
+
+    const box = document.createElement('div');
+    box.className = 'lja-confirm-box';
+
+    const p = document.createElement('p');
+    p.textContent = message; // Safe: textContent prevents XSS
+
+    const actions = document.createElement('div');
+    actions.className = 'lja-confirm-actions';
+
+    const yesBtn = document.createElement('button');
+    yesBtn.id = 'lja-confirm-yes';
+    yesBtn.textContent = 'Submit';
+
+    const noBtn = document.createElement('button');
+    noBtn.id = 'lja-confirm-no';
+    noBtn.textContent = 'Skip';
+
+    actions.appendChild(yesBtn);
+    actions.appendChild(noBtn);
+    box.appendChild(p);
+    box.appendChild(actions);
+    overlay.appendChild(box);
     document.body.appendChild(overlay);
 
-    document.getElementById('lja-confirm-yes').onclick = () => {
+    yesBtn.onclick = () => {
       overlay.remove();
       resolve(true);
     };
-    document.getElementById('lja-confirm-no').onclick = () => {
+    noBtn.onclick = () => {
       overlay.remove();
       resolve(false);
     };

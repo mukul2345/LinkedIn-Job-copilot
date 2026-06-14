@@ -11,10 +11,18 @@ async function startHROutreach(state) {
   state.hrStopRequested = false;
   const config = await getStorage(null);
 
-  const messageTemplate = config.hrMessageTemplate ||
-    "Hi {name}, I hope you're doing well! I'm a Backend Developer with 3+ years of experience in Node.js, TypeScript, and AWS. I'm currently exploring new opportunities and wanted to check if there are any relevant openings at your organization. I'd appreciate any guidance. Thank you!";
-  const dailyLimit = config.hrDailyLimit || 25;
-  const delayBetween = Math.max((config.hrDelayBetween || 30), 15) * 1000;
+  // Read template from user-configured data (pushed by popup from Firestore)
+  const templates = config.templates || {};
+  const messageTemplate = templates.hrMessage || '';
+  
+  if (!messageTemplate) {
+    log('No HR message template configured. Please set one in Settings → HR Outreach.', 'error');
+    chrome.storage.local.set({ hrBotRunning: false });
+    return;
+  }
+
+  const dailyLimit = templates.hrDailyLimit || config.hrDailyLimit || 25;
+  const delayBetween = Math.max((templates.hrDelayBetween || config.hrDelayBetween || 30), 15) * 1000;
 
   // Get already messaged HRs to avoid duplicates
   const messagedHRs = config.messagedHRs || [];
@@ -22,9 +30,16 @@ async function startHROutreach(state) {
   const todayCount = messagedHRs.filter(h => h.date && h.date.startsWith(today)).length;
 
   if (todayCount >= dailyLimit) {
-    log(`Daily HR message limit reached (${dailyLimit}). Try again tomorrow.`, 'warning');
+    log(`Daily HR message limit reached (${dailyLimit}). Stopping to protect your account.`, 'warning');
+    showSafetyAlert(`⚠️ Daily limit reached (${todayCount}/${dailyLimit} messages). Bot stopped to protect your LinkedIn account from spam flags.`, 'danger');
     chrome.storage.local.set({ hrBotRunning: false });
     return;
+  }
+
+  // Warn at 20 messages — LinkedIn's known spam threshold
+  if (todayCount >= 20) {
+    log(`⚠️ LinkedIn safety: ${todayCount} messages sent today. Approaching spam threshold.`, 'warning');
+    showSafetyAlert(`⚠️ You've sent ${todayCount} messages today. LinkedIn may flag accounts sending 20+ messages/day. Bot will stop at your limit (${dailyLimit}).`, 'warning');
   }
 
   log(`HR outreach started. Already sent ${todayCount}/${dailyLimit} today.`, 'info');
@@ -35,7 +50,7 @@ async function startHROutreach(state) {
 
   if (!window.location.href.includes('search/results/people')) {
     window.location.href = searchUrl;
-    chrome.storage.local.set({ hrBotRunning: true, hrBotState: 'searching' });
+    chrome.storage.local.set({ hrBotRunning: true, hrBotState: 'searching', hrBotStateTimestamp: Date.now() });
     return;
   }
 
@@ -80,10 +95,22 @@ async function startHROutreach(state) {
           await incrementHRMessageCount(); // Track usage for plan limits
           log(`[${sentCount}/${dailyLimit}] Message sent successfully.`, 'success');
 
+          // Check if daily limit reached — stop immediately
+          if (sentCount >= dailyLimit) {
+            log(`Daily limit reached (${dailyLimit}). Stopping HR outreach to protect your account.`, 'warning');
+            showSafetyAlert(`✅ Done! Sent ${sentCount} messages today (limit: ${dailyLimit}). Stopped to keep your account safe.`, 'info');
+            state.hrStopRequested = true;
+            break;
+          }
+
+          // Warn at 20 messages mid-run
+          if (sentCount === 20) {
+            showSafetyAlert(`⚠️ 20 messages sent today. LinkedIn may flag further messages as spam. Bot will stop at ${dailyLimit}.`, 'warning');
+          }
+
           // Ensure message window is closed before moving to next
           await closeMessageWindow();
-          await sleep(1000);
-          await closeMessageWindow(); // Double-close in case first didn't work
+          await sleep(500);
 
           // Wait between messages (rate limiting)
           log(`Waiting ${Math.round(delayBetween / 1000)}s before next message...`, 'info');
@@ -91,7 +118,7 @@ async function startHROutreach(state) {
         } else if (result === 'failed') {
           // Ensure window is closed on failure too
           await closeMessageWindow();
-          await sleep(500);
+          await sleep(300);
         }
       } catch (e) {
         log(`Error processing HR card: ${e.message}`, 'warning');
@@ -183,19 +210,47 @@ async function processHRCard(card, context) {
   const actualMsgBtn = findMessageButtonOnCard(card);
   if (!actualMsgBtn) return 'skipped';
 
-  // Personalize the message (supports {name}, {Name}, {NAME} variants)
+  // Personalize the message — replace ALL supported placeholders
   const firstName = name.split(' ')[0];
+  const config = await getStorage(null);
+  const myName = [config.firstName, config.lastName].filter(Boolean).join(' ') || 'Me';
+  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '3';
+  const headline = config.linkedinHeadline || config.profile?.linkedinHeadline || '';
+
+  // Try to extract company from the person's card (subtitle/headline on the card)
+  let personCompany = '';
+  const subtitleEl = card.querySelector('.entity-result__primary-subtitle, [class*="subtitle"], [class*="headline"]');
+  if (subtitleEl) {
+    const subtitleText = subtitleEl.textContent.trim();
+    // LinkedIn shows "Title at Company" or "Company" in subtitle
+    const atMatch = subtitleText.match(/(?:at|@)\s+(.+)/i);
+    if (atMatch) {
+      personCompany = atMatch[1].trim();
+    } else {
+      // Might be just the company name or "Title | Company"
+      const pipeMatch = subtitleText.split('|').pop()?.trim() || '';
+      if (pipeMatch && pipeMatch.length < 50) {
+        personCompany = pipeMatch;
+      }
+    }
+  }
+
   const personalizedMsg = messageTemplate
-    .replace(/\{name\}/gi, firstName);
+    .replace(/\{name\}/gi, firstName)
+    .replace(/\{myName\}/gi, myName)
+    .replace(/\{experience\}/gi, experience)
+    .replace(/\{headline\}/gi, headline)
+    .replace(/\{company\}/gi, personCompany)
+    .replace(/\{jobTitle\}/gi, '');  // Job title not available in HR search context
 
   // Click Message button
   actualMsgBtn.scrollIntoView({ block: 'center', behavior: 'smooth' });
-  await sleep(500);
+  await sleep(400);
   actualMsgBtn.click();
 
-  // Wait for message window to open
+  // Wait for message window to open (adaptive — checks quickly, waits up to 8s)
   log(`Opening message window for ${name}...`, 'info');
-  await sleep(4000);
+  await sleep(1500); // Initial wait for window animation
 
   // Try to find the message input
   const msgInput = await waitForMessageInput();
@@ -247,11 +302,12 @@ async function processHRCard(card, context) {
  * Wait for the LinkedIn message input to appear with proper retry logic.
  * LinkedIn renders the messaging UI inside a Shadow DOM (div.theme--light),
  * so we must query inside shadowRoot to find the input.
+ * Optimized: polls every 300ms for up to 8 seconds (faster detection).
  * @returns {Element|null}
  */
 async function waitForMessageInput() {
-  // Poll for up to 10 seconds (20 attempts × 500ms)
-  for (let attempt = 0; attempt < 20; attempt++) {
+  // Poll for up to 8 seconds (27 attempts × 300ms)
+  for (let attempt = 0; attempt < 27; attempt++) {
     // Try Shadow DOM first (LinkedIn 2025-2026 uses Shadow DOM for messaging)
     const shadowInput = findInputInShadowDOM();
     if (shadowInput) return shadowInput;
@@ -260,7 +316,7 @@ async function waitForMessageInput() {
     const regularInput = findMessageInputElement();
     if (regularInput) return regularInput;
 
-    await sleep(500);
+    await sleep(300);
   }
 
   // Last resort: brute-force
@@ -419,16 +475,16 @@ async function typeAndSendMessage(msgInput, message, name, profileUrl, messagedH
   // Focus and click the input
   msgInput.click();
   msgInput.focus();
-  await sleep(500);
+  await sleep(300);
 
   // Clear any existing content
   document.execCommand('selectAll', false, null);
   document.execCommand('delete', false, null);
-  await sleep(200);
+  await sleep(150);
 
   // Type the message using execCommand (works with contenteditable)
   document.execCommand('insertText', false, message);
-  await sleep(1000);
+  await sleep(600);
 
   // Verify text was typed
   const parentEditable = msgInput.closest('[contenteditable="true"]') || msgInput;
@@ -462,7 +518,7 @@ async function typeAndSendMessage(msgInput, message, name, profileUrl, messagedH
 
   // Fire input event to enable Send button
   parentEditable.dispatchEvent(new Event('input', { bubbles: true }));
-  await sleep(1000);
+  await sleep(600);
 
   // Check again for recent conversation (duplicate check after message loads)
   if (await hasRecentConversation()) {
@@ -550,8 +606,9 @@ async function clickSendButton(parentEditable, message) {
 }
 
 /**
- * Check if there's a recent conversation (within last 2 months).
- * Checks both regular DOM and Shadow DOM.
+ * Check if there's ANY existing conversation with this person.
+ * If any messages exist (including deleted ones), skip — we've already messaged them.
+ * This prevents re-messaging people even if messages were deleted.
  * @returns {boolean}
  */
 async function hasRecentConversation() {
@@ -570,29 +627,10 @@ async function hasRecentConversation() {
     return results;
   }
 
+  // Check if ANY messages exist in the conversation — if yes, we've already talked
   const chatMsgs = queryAll(SELECTORS.chatMessages.join(', '));
-  if (chatMsgs.length === 0) return false;
-
-  // Check timestamps — skip if messaged within last 3 months (90 days)
-  const timeEls = queryAll(SELECTORS.chatTimestamps.join(', '));
-  const threeMonthsAgo = Date.now() - (90 * 24 * 60 * 60 * 1000);
-
-  for (const t of timeEls) {
-    const dt = t.getAttribute('datetime');
-    if (dt && new Date(dt).getTime() > threeMonthsAgo) {
-      return true;
-    }
-  }
-
-  // Check by text content for relative timestamps
-  for (const ts of timeEls) {
-    const text = ts.textContent.toLowerCase();
-    if (text.includes('today') || text.includes('yesterday') ||
-        text.includes('hour') || text.includes('minute') ||
-        text.includes('day ago') || text.includes('days ago') ||
-        text.includes('week ago') || text.includes('weeks ago')) {
-      return true;
-    }
+  if (chatMsgs.length > 0) {
+    return true; // Any message = already contacted, skip this person
   }
 
   return false;

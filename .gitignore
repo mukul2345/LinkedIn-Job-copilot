@@ -21,6 +21,12 @@ coverage/
 # Firebase service account (NEVER commit this)
 scripts/service-account-key.json
 service-account-key.json
+service-account*.json
+*.key
+
+# Environment secrets (NEVER commit actual .env files)
+.env
+functions/.env
 
 # Cloud Functions secrets
 functions/.env

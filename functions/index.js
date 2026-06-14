@@ -1,8 +1,8 @@
 /**
  * JobPilot AI - Firebase Cloud Functions
- * Handles Cashfree payment creation and webhook verification.
+ * Handles Cashfree payment creation, webhook verification, and enhanced feature endpoints.
  * 
- * FLOW:
+ * PAYMENT FLOW:
  * 1. User clicks "Subscribe to Pro" in extension
  * 2. Extension calls createPaymentSession() Cloud Function
  * 3. Cloud Function creates a Cashfree payment session and returns payment link
@@ -10,6 +10,13 @@
  * 5. Cashfree sends webhook to handlePaymentWebhook() Cloud Function
  * 6. Cloud Function verifies signature, activates Pro plan in Firestore
  * 7. Extension reads updated plan on next open
+ *
+ * ENHANCED FEATURES:
+ * - searchJobs: Multi-board job search via Python scraper
+ * - uploadResume / tailorResume: Resume upload and AI-powered tailoring
+ * - computeFitScore / recomputeScores: AI-powered job fit scoring
+ * - scanGmail: Gmail inbox scanning for application tracking
+ * - classifySponsorship: Visa sponsorship detection
  */
 
 const functions = require('firebase-functions');
@@ -18,6 +25,37 @@ const crypto = require('crypto');
 
 admin.initializeApp();
 const db = admin.firestore();
+
+// ============================================================
+// ENHANCED FEATURE FUNCTIONS (imported from separate modules)
+// ============================================================
+const { searchJobs } = require('./search');
+const { uploadResume, tailorResume } = require('./resume');
+const { computeFitScore, recomputeScores } = require('./scoring');
+const { scanGmail } = require('./tracker');
+const { classifySponsorship } = require('./visa');
+
+// Re-export enhanced feature functions
+exports.searchJobs = searchJobs;
+exports.uploadResume = uploadResume;
+exports.tailorResume = tailorResume;
+exports.computeFitScore = computeFitScore;
+exports.recomputeScores = recomputeScores;
+exports.scanGmail = scanGmail;
+exports.classifySponsorship = classifySponsorship;
+
+// ============================================================
+// ADMIN EMAIL CONFIGURATION
+// Add emails that should automatically get admin role on signup.
+// ============================================================
+const ADMIN_EMAILS = [
+  'mukul798348@gmail.com',
+];
+
+// Razorpay payment integration
+const { createRazorpaySession, handleRazorpayWebhook, activateProPlan } = require('./payments-razorpay');
+exports.createRazorpaySession = createRazorpaySession;
+exports.handleRazorpayWebhook = handleRazorpayWebhook;
 
 // Cashfree API configuration (reads from functions/.env file)
 const CASHFREE_CONFIG = {
@@ -71,7 +109,64 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
     const userEmail = decodedToken.email;
     const userName = decodedToken.name || 'User';
 
-    const { planId } = req.body;
+    const { planId, provider } = req.body;
+
+    // If Razorpay selected, delegate to Razorpay handler
+    if (provider === 'razorpay') {
+      // Forward to Razorpay session creator
+      const rzpModule = require('./payments-razorpay');
+      // Create Razorpay order directly
+      const receiptId = `order_${userId.substring(0, 8)}_${Date.now()}`;
+      const plan = PRICING[planId];
+      if (!plan) return res.status(400).json({ error: `Invalid plan: ${planId}` });
+
+      const orderPayload = {
+        amount: plan.price * 100,
+        currency: 'INR',
+        receipt: receiptId,
+        notes: { userId, planId, period: String(plan.period), userEmail },
+      };
+
+      const rzpResponse = await fetch('https://api.razorpay.com/v1/orders', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Basic ' + Buffer.from((process.env.RAZORPAY_KEY_ID || '') + ':' + (process.env.RAZORPAY_KEY_SECRET || '')).toString('base64'),
+        },
+        body: JSON.stringify(orderPayload),
+      });
+
+      const rzpResult = await rzpResponse.json();
+      if (!rzpResponse.ok) {
+        return res.status(500).json({ error: 'Razorpay order creation failed', details: rzpResult.error?.description });
+      }
+
+      await db.collection('orders').doc(receiptId).set({
+        orderId: receiptId,
+        razorpayOrderId: rzpResult.id,
+        userId, userEmail, planId,
+        amount: plan.price,
+        period: plan.period,
+        provider: 'razorpay',
+        status: 'created',
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+
+      return res.status(200).json({
+        success: true,
+        provider: 'razorpay',
+        orderId: receiptId,
+        razorpayOrderId: rzpResult.id,
+        razorpayKeyId: process.env.RAZORPAY_KEY_ID,
+        amount: plan.price * 100,
+        currency: 'INR',
+        name: 'JobPilot AI',
+        description: `Pro Plan - ${plan.label}`,
+        prefill: { email: userEmail, name: userName },
+      });
+    }
+
+    // Default: Cashfree flow
 
     // Validate plan
     if (!PRICING[planId]) {
@@ -129,6 +224,7 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
       planId,
       amount: plan.price,
       period: plan.period,
+      provider: 'cashfree',
       status: 'created',
       cashfreeOrderId: result.cf_order_id,
       paymentSessionId: result.payment_session_id,
@@ -416,3 +512,92 @@ function verifyWebhookSignature(rawBody, signature, timestamp) {
     return false;
   }
 }
+
+// ============================================================
+// FUNCTION: Auto-assign admin role on user creation
+// Triggers when a new Firebase Auth user is created.
+// If their email is in ADMIN_EMAILS, sets admin custom claim + Firestore role.
+// ============================================================
+exports.onUserCreated = functions.auth.user().onCreate(async (user) => {
+  const email = user.email?.toLowerCase();
+  
+  if (!email || !ADMIN_EMAILS.includes(email)) {
+    return; // Not an admin — do nothing
+  }
+
+  console.log(`[JobPilot] Admin user detected: ${email}. Setting admin role...`);
+
+  try {
+    // Set Firebase custom claim (for security rules)
+    await admin.auth().setCustomUserClaims(user.uid, { admin: true });
+
+    // Update Firestore user document (if it exists already)
+    const userDoc = await db.collection('users').doc(user.uid).get();
+    if (userDoc.exists) {
+      await db.collection('users').doc(user.uid).update({
+        role: 'admin',
+        plan: 'pro',
+        planExpiresAt: null, // Admin never expires
+      });
+    }
+
+    console.log(`[JobPilot] ✅ Admin role set for ${email} (uid: ${user.uid})`);
+  } catch (error) {
+    console.error(`[JobPilot] Failed to set admin role for ${email}:`, error);
+  }
+});
+
+// ============================================================
+// FUNCTION: Manual admin assignment (HTTP endpoint)
+// POST /setAdminRole { email: "..." }
+// Only callable with a valid admin token or from the Firebase Console.
+// ============================================================
+exports.setAdminRole = functions.https.onRequest(async (req, res) => {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+  if (req.method === 'OPTIONS') return res.status(204).send('');
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  try {
+    // Verify caller is admin
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const idToken = authHeader.split('Bearer ')[1];
+    const decodedToken = await admin.auth().verifyIdToken(idToken);
+    
+    // Only existing admins can set new admins
+    if (!decodedToken.admin) {
+      return res.status(403).json({ error: 'Only admins can assign admin role' });
+    }
+
+    const { email } = req.body;
+    if (!email) return res.status(400).json({ error: 'Email is required' });
+
+    // Find user by email
+    const userRecord = await admin.auth().getUserByEmail(email);
+    
+    // Set custom claims
+    await admin.auth().setCustomUserClaims(userRecord.uid, { admin: true });
+
+    // Update Firestore
+    const userDoc = await db.collection('users').doc(userRecord.uid).get();
+    if (userDoc.exists) {
+      await db.collection('users').doc(userRecord.uid).update({
+        role: 'admin',
+        plan: 'pro',
+        planExpiresAt: null,
+      });
+    }
+
+    console.log(`[JobPilot] ✅ Admin role manually set for ${email}`);
+    return res.status(200).json({ success: true, message: `Admin role set for ${email}` });
+  } catch (error) {
+    console.error('[JobPilot] setAdminRole error:', error);
+    return res.status(500).json({ error: error.message });
+  }
+});

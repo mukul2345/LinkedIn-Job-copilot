@@ -75,13 +75,18 @@
           // Check if this is a fresh page load vs. bot-triggered navigation
           // using performance.navigation or Navigation Timing API
           const navType = performance.getEntriesByType('navigation')[0]?.type;
-          if (navType === 'navigate') {
+
+          // Also check staleness — if hrBotState was set more than 2 minutes ago, assume stale
+          const hrStateTimestamp = data.hrBotStateTimestamp || 0;
+          const isStale = Date.now() - hrStateTimestamp > 2 * 60 * 1000;
+
+          if (navType === 'navigate' && !isStale) {
             // Bot-triggered navigation (window.location.href = ...)
             setTimeout(() => startHROutreach(state), 2000);
           } else {
-            // User reloaded the page (reload) or back/forward — stop the bot
-            log('Page reloaded by user. Stopping HR outreach.', 'info');
-            chrome.storage.local.set({ hrBotRunning: false, hrBotState: null });
+            // User reloaded the page (reload) or back/forward, or state is stale — stop the bot
+            log('Page reloaded by user or stale state. Stopping HR outreach.', 'info');
+            chrome.storage.local.set({ hrBotRunning: false, hrBotState: null, hrBotStateTimestamp: null });
           }
         } else if (data.botRunning && !data.pendingAutoLogin) {
           // Job application bot: check if this is a bot-triggered navigation
@@ -110,11 +115,25 @@
 
   // ===== AUTO-LOGIN HANDLER =====
   async function handleAutoLogin(state) {
-    const data = await getStorage(['linkedinEmail', 'linkedinPassword', 'loginMode']);
+    const data = await getStorage(['linkedinEmail', 'linkedinPassword', 'loginMode', 'credentialsObfuscated']);
     if (data.loginMode === 'manual' || !data.linkedinEmail || !data.linkedinPassword) {
       log('Manual login mode or no credentials. Please log in manually.', 'warning');
       chrome.storage.local.set({ pendingAutoLogin: false });
       return;
+    }
+
+    // Decode obfuscated credentials
+    let email = data.linkedinEmail;
+    let password = data.linkedinPassword;
+    if (data.credentialsObfuscated) {
+      try {
+        email = decodeURIComponent(atob(email));
+        password = decodeURIComponent(atob(password));
+      } catch (e) {
+        log('Failed to decode credentials. Please re-enter them.', 'error');
+        chrome.storage.local.set({ pendingAutoLogin: false });
+        return;
+      }
     }
 
     log('Attempting auto-login...', 'info');
@@ -125,8 +144,8 @@
     const submitBtn = document.querySelector('button[type="submit"]');
 
     if (emailField && passField && submitBtn) {
-      setNativeValue(emailField, data.linkedinEmail);
-      setNativeValue(passField, data.linkedinPassword);
+      setNativeValue(emailField, email);
+      setNativeValue(passField, password);
       await sleep(500);
       submitBtn.click();
 

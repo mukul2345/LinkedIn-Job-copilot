@@ -1,0 +1,41 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===== USER DOCUMENTS =====
+    match /users/{uid} {
+      // Users can read their own document
+      allow read: if request.auth != null && request.auth.uid == uid;
+
+      // Users can create their own document (on signup)
+      allow create: if request.auth != null && request.auth.uid == uid;
+
+      // Users can update their own document BUT cannot change role, plan, or planExpiresAt
+      allow update: if request.auth != null && request.auth.uid == uid
+                    && (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)
+                    && (!('plan' in request.resource.data) || request.resource.data.plan == resource.data.plan)
+                    && (!('planExpiresAt' in request.resource.data) || request.resource.data.planExpiresAt == resource.data.planExpiresAt);
+
+      // Users cannot delete their own doc
+      allow delete: if false;
+    }
+
+    // ===== SYSTEM COLLECTION =====
+    // Allow authenticated users to read/write counters (needed for userId generation)
+    // In production, you'd lock this down further with Cloud Functions
+    match /system/{doc} {
+      allow read, write: if request.auth != null;
+    }
+
+    // ===== ORDERS COLLECTION =====
+    // No direct client access — managed by Cloud Functions only
+    match /orders/{orderId} {
+      allow read, write: if false;
+    }
+
+    // ===== ADMIN OVERRIDE =====
+    match /{document=**} {
+      allow read: if request.auth != null && request.auth.token.admin == true;
+    }
+  }
+}

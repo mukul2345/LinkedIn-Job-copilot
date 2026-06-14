@@ -1,0 +1,187 @@
+/* JobPilot AI - Floating helper for job boards */
+
+#jp-job-helper-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6);
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px rgba(99, 102, 241, 0.4);
+  z-index: 99999;
+  transition: transform 0.2s, box-shadow 0.2s;
+  user-select: none;
+}
+
+#jp-job-helper-fab:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 24px rgba(99, 102, 241, 0.6);
+}
+
+#jp-job-helper-panel {
+  position: fixed;
+  bottom: 90px;
+  right: 24px;
+  width: 340px;
+  max-height: 500px;
+  background: #1a1d27;
+  border-radius: 16px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  z-index: 99999;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  color: #f1f5f9;
+  overflow: hidden;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.jp-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  background: rgba(99, 102, 241, 0.1);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.jp-panel-header button {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 18px;
+  padding: 4px;
+}
+
+.jp-panel-body {
+  padding: 18px;
+  overflow-y: auto;
+  max-height: 400px;
+}
+
+.jp-hint {
+  font-size: 13px;
+  color: #94a3b8;
+  margin: 0 0 14px 0;
+  line-height: 1.5;
+}
+
+.jp-btn {
+  display: block;
+  width: 100%;
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+  margin-bottom: 10px;
+}
+
+.jp-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.jp-btn-primary {
+  background: #6366f1;
+  color: white;
+}
+
+.jp-btn-primary:hover:not(:disabled) {
+  background: #5558e6;
+}
+
+.jp-btn-secondary {
+  background: rgba(99, 102, 241, 0.15);
+  color: #a5b4fc;
+  border: 1px solid rgba(99, 102, 241, 0.3);
+}
+
+.jp-btn-secondary:hover:not(:disabled) {
+  background: rgba(99, 102, 241, 0.25);
+}
+
+/* Score Display */
+.jp-score-circle {
+  text-align: center;
+  padding: 20px;
+  border: 3px solid;
+  border-radius: 12px;
+  margin: 12px 0;
+}
+
+.jp-score-number {
+  display: block;
+  font-size: 36px;
+  font-weight: 700;
+}
+
+.jp-score-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 500;
+  margin-top: 4px;
+  opacity: 0.8;
+}
+
+.jp-explanation-text {
+  font-size: 13px;
+  color: #cbd5e1;
+  line-height: 1.5;
+  margin: 10px 0;
+}
+
+.jp-skills-match {
+  font-size: 12px;
+  color: #10b981;
+  margin: 6px 0;
+}
+
+.jp-skills-missing {
+  font-size: 12px;
+  color: #eab308;
+  margin: 6px 0;
+}
+
+/* Loading */
+.jp-spinner {
+  width: 32px;
+  height: 32px;
+  border: 3px solid rgba(99, 102, 241, 0.2);
+  border-top-color: #6366f1;
+  border-radius: 50%;
+  animation: jp-spin 0.8s linear infinite;
+  margin: 16px auto;
+}
+
+@keyframes jp-spin {
+  to { transform: rotate(360deg); }
+}
+
+#jp-loading {
+  text-align: center;
+}
+
+#jp-loading p {
+  font-size: 13px;
+  color: #94a3b8;
+}
+
+#jp-error {
+  font-size: 13px;
+  color: #ef4444;
+  padding: 10px;
+  background: rgba(239, 68, 68, 0.1);
+  border-radius: 8px;
+  margin-top: 10px;
+}

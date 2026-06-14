@@ -52,6 +52,23 @@ const mockTabsOnUpdatedRemoveListener = jest.fn();
 // Mock chrome.notifications
 const mockNotificationsCreate = jest.fn();
 
+// Mock chrome.alarms
+const mockAlarmsCreate = jest.fn();
+const mockAlarmsClear = jest.fn((name, callback) => { if (callback) callback(true); });
+const mockAlarmsOnAlarmAddListener = jest.fn();
+
+// Mock chrome.identity
+const mockIdentityGetAuthToken = jest.fn((options, callback) => {
+  callback('mock-token');
+});
+const mockIdentityRemoveCachedAuthToken = jest.fn((details, callback) => {
+  if (callback) callback();
+});
+
+// Mock chrome.action
+const mockActionSetBadgeText = jest.fn((details, callback) => { if (callback) callback(); });
+const mockActionSetBadgeBackgroundColor = jest.fn((details, callback) => { if (callback) callback(); });
+
 // Assemble the global chrome mock
 global.chrome = {
   runtime: {
@@ -86,6 +103,21 @@ global.chrome = {
   notifications: {
     create: mockNotificationsCreate,
   },
+  alarms: {
+    create: mockAlarmsCreate,
+    clear: mockAlarmsClear,
+    onAlarm: {
+      addListener: mockAlarmsOnAlarmAddListener,
+    },
+  },
+  identity: {
+    getAuthToken: mockIdentityGetAuthToken,
+    removeCachedAuthToken: mockIdentityRemoveCachedAuthToken,
+  },
+  action: {
+    setBadgeText: mockActionSetBadgeText,
+    setBadgeBackgroundColor: mockActionSetBadgeBackgroundColor,
+  },
 };
 
 // Helper to reset all mocks between tests
@@ -101,6 +133,13 @@ global.resetChromeMocks = () => {
   mockTabsUpdate.mockClear();
   mockTabsSendMessage.mockClear();
   mockNotificationsCreate.mockClear();
+  mockAlarmsCreate.mockClear();
+  mockAlarmsClear.mockClear();
+  mockAlarmsOnAlarmAddListener.mockClear();
+  mockIdentityGetAuthToken.mockClear();
+  mockIdentityRemoveCachedAuthToken.mockClear();
+  mockActionSetBadgeText.mockClear();
+  mockActionSetBadgeBackgroundColor.mockClear();
   // Clear stored data
   Object.keys(mockStorageData).forEach(k => delete mockStorageData[k]);
 };

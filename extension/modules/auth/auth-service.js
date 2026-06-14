@@ -22,18 +22,10 @@ async function signUpUser(email, password, name) {
     // Generate a typed user ID (USR@00001 format)
     const userId = await generateUserId();
 
-    // Create user document in Firestore with role, plan, and typed ID
-    await db.collection('users').doc(user.uid).set({
-      userId: userId,            // Typed ID: USR@00001
-      email: user.email,
-      displayName: name,
-      role: USER_ROLES.USER,     // Default role: regular user
-      plan: PLAN_TYPES.FREE,     // Default plan: free
-      planExpiresAt: null,
-      createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
+    // Create full user document in Firestore with all required fields
+    await createUserDocument(user.uid, user.email, name, userId);
 
-    // Cache role and userId locally
+    // Cache role and userId locally (for content script access)
     await new Promise(resolve => {
       chrome.storage.local.set({
         userRole: USER_ROLES.USER,
@@ -110,17 +102,9 @@ async function signInWithGoogle() {
     // Create/update user document
     const userDoc = await db.collection('users').doc(user.uid).get();
     if (!userDoc.exists) {
-      // New user — generate typed ID
+      // New user — generate typed ID and create full document
       const userId = await generateUserId();
-      await db.collection('users').doc(user.uid).set({
-        userId: userId,
-        email: user.email,
-        displayName: user.displayName,
-        role: USER_ROLES.USER,
-        plan: PLAN_TYPES.FREE,
-        planExpiresAt: null,
-        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
-      });
+      await createUserDocument(user.uid, user.email, user.displayName, userId);
       await new Promise(resolve => {
         chrome.storage.local.set({
           userRole: USER_ROLES.USER,
@@ -154,13 +138,17 @@ async function signInWithGoogle() {
 async function signOutUser() {
   try {
     await auth.signOut();
-    // Clear session/auth/role data
+    // Invalidate all cached user data
+    if (typeof invalidateAllCache === 'function') {
+      await invalidateAllCache();
+    }
+    // Clear session/auth/role data from chrome.storage.local
     const keysToRemove = [
       'userPlan', 'planExpiresAt', 'planCachedAt', 'userRole',
       'cachedUserEmail', 'cachedUserId',
       'botRunning', 'hrBotRunning', 'botState', 'hrBotState',
       'pendingAutoLogin', 'pendingPayment',
-      'activityLog',
+      'activityLog', 'onboardingComplete',
     ];
     await new Promise(resolve => chrome.storage.local.remove(keysToRemove, resolve));
     return { success: true };

@@ -44,7 +44,12 @@ async function processJobCard(card, config, applicationHistory) {
       titleLink.scrollIntoView({ block: 'center', behavior: 'smooth' });
       await sleep(300);
       titleLink.click();
-      await sleep(1500);
+      // Wait for job detail panel to load (description area)
+      await waitForAnyElement(
+        ['.jobs-box__html-content', '.jobs-description__content', '.jobs-search__job-details'],
+        8000
+      );
+      await sleep(500); // Brief extra wait for button rendering
     }
 
     // Check job description for bad words
@@ -68,11 +73,18 @@ async function processJobCard(card, config, applicationHistory) {
       }
     }
 
-    // Find and click Easy Apply button
+    // Find and click Easy Apply button (with retry/wait for button to render)
     let easyApplyBtn = null;
+    
+    // First attempt - immediate check
     for (const sel of SELECTORS.easyApplyButton) {
       easyApplyBtn = document.querySelector(sel);
       if (easyApplyBtn) break;
+    }
+
+    // If not found, wait for it (LinkedIn lazy-loads the button after description)
+    if (!easyApplyBtn) {
+      easyApplyBtn = await retryFindElement(SELECTORS.easyApplyButton, 3, 1000);
     }
 
     if (!easyApplyBtn) {
@@ -86,22 +98,39 @@ async function processJobCard(card, config, applicationHistory) {
       return 'skipped';
     }
 
+    // Scroll button into view before clicking (prevents click miss)
+    easyApplyBtn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    await sleep(400);
     easyApplyBtn.click();
     await sleep(1500);
 
-    // Wait for Easy Apply modal
+    // Wait for Easy Apply modal (with retry click if first click didn't register)
     await sleep(1000);
     let modal = document.querySelector(SELECTORS.easyApplyModal.join(', '));
     if (!modal) {
-      await waitForAnyElement(SELECTORS.easyApplyModal, 5000);
-      modal = document.querySelector(SELECTORS.easyApplyModal.join(', '));
+      modal = await waitForAnyElement(SELECTORS.easyApplyModal, 5000);
     }
     if (!modal) {
-      log(`Failed: "${title}" (modal not found)`, 'error');
+      // Retry: click button again (sometimes first click doesn't register)
+      log(`Modal not found on first click for "${title}". Retrying...`, 'info');
+      easyApplyBtn.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      await sleep(300);
+      easyApplyBtn.click();
+      await sleep(2000);
+      modal = document.querySelector(SELECTORS.easyApplyModal.join(', '));
+      if (!modal) {
+        modal = await waitForAnyElement(SELECTORS.easyApplyModal, 5000);
+      }
+    }
+    if (!modal) {
+      log(`Failed: "${title}" (modal not found after retry)`, 'error');
       return 'failed';
     }
 
     // Process the multi-step form
+    // Attach current job context to config for AI form answering
+    config._currentJobTitle = title;
+    config._currentCompany = company;
     const success = await processEasyApplyModal(modal, title, company, config);
 
     if (success) {
@@ -127,13 +156,13 @@ async function processJobCard(card, config, applicationHistory) {
 
       return 'applied';
     } else {
-      discardApplication();
+      await discardApplication();
       log(`Failed: "${title}" (form issue)`, 'error');
       return 'failed';
     }
 
   } catch (e) {
-    try { discardApplication(); } catch (_) {}
+    try { await discardApplication(); } catch (_) {}
     log(`Error on job: ${e.message}`, 'error');
     return 'failed';
   }
@@ -326,7 +355,9 @@ function handleFollowCompany(modal, config) {
   try {
     const shouldFollow = config.followCompanies === true;
 
-    // LinkedIn uses different selectors for the follow checkbox across versions
+    let followCheckbox = null;
+
+    // Strategy 1: Find by ID patterns
     const checkboxSelectors = [
       '#follow-company-checkbox',
       'input[id*="follow"]',
@@ -334,99 +365,115 @@ function handleFollowCompany(modal, config) {
       'input[type="checkbox"][id*="company"]',
       'input[type="checkbox"][id*="follow"]',
     ];
-
-    let followCheckbox = null;
-
-    // Search in the modal
     for (const sel of checkboxSelectors) {
-      followCheckbox = modal.querySelector(sel);
+      followCheckbox = modal.querySelector(sel) || document.querySelector(sel);
       if (followCheckbox) break;
     }
 
-    // Also search in the entire document (modal might not contain it directly)
+    // Strategy 2: Find checkbox near "Follow" text in the modal
     if (!followCheckbox) {
-      for (const sel of checkboxSelectors) {
-        followCheckbox = document.querySelector(sel);
-        if (followCheckbox) break;
-      }
-    }
-
-    // Also try inside Shadow DOM
-    if (!followCheckbox) {
-      const shadowRoot = typeof getShadowRoot === 'function' ? getShadowRoot() : null;
-      if (shadowRoot) {
-        for (const sel of checkboxSelectors) {
-          followCheckbox = shadowRoot.querySelector(sel);
-          if (followCheckbox) break;
+      const allCheckboxes = modal.querySelectorAll('input[type="checkbox"]');
+      for (const cb of allCheckboxes) {
+        // Walk up to find the closest container and check its text
+        const container = cb.closest('div') || cb.closest('label') || cb.parentElement;
+        if (container && container.textContent.toLowerCase().includes('follow')) {
+          followCheckbox = cb;
+          break;
         }
       }
     }
 
-    // Also try finding by label text "Follow"
+    // Strategy 3: Search the entire page for a checkbox near "stay up to date" text
     if (!followCheckbox) {
-      const searchContainers = [modal, document];
-      for (const container of searchContainers) {
-        const labels = container.querySelectorAll('label');
-        for (const label of labels) {
-          if (label.textContent.toLowerCase().includes('follow')) {
-            const forAttr = label.getAttribute('for');
-            const checkbox = label.querySelector('input[type="checkbox"]') ||
-                            (forAttr ? container.querySelector(`#${forAttr}`) : null);
-            if (checkbox) {
-              followCheckbox = checkbox;
-              break;
-            }
+      const allCheckboxes = document.querySelectorAll('input[type="checkbox"]');
+      for (const cb of allCheckboxes) {
+        const container = cb.closest('div[class*="follow"]') || cb.closest('label') || cb.parentElement;
+        if (container) {
+          const text = container.textContent.toLowerCase();
+          if (text.includes('follow') || text.includes('stay up to date')) {
+            followCheckbox = cb;
+            break;
           }
         }
-        if (followCheckbox) break;
       }
     }
 
-    if (followCheckbox) {
-      // If checkbox state doesn't match user preference, toggle it
-      if (followCheckbox.checked !== shouldFollow) {
-        // Try clicking the label first (more reliable for custom checkboxes)
-        const labelFor = followCheckbox.id ?
-          (modal.querySelector(`label[for="${followCheckbox.id}"]`) ||
-           document.querySelector(`label[for="${followCheckbox.id}"]`)) : null;
-        if (labelFor) {
-          labelFor.click();
-        } else {
-          followCheckbox.click();
-        }
-        // Verify the change took effect
-        if (followCheckbox.checked !== shouldFollow) {
-          // Direct property set as fallback
-          followCheckbox.checked = shouldFollow;
-          followCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
-        }
-      }
+    if (!followCheckbox) {
+      log('Follow checkbox not found — LinkedIn may have changed their UI.', 'info');
+      return;
     }
-  } catch (e) { /* ignore */ }
+
+    // Now toggle it
+    if (followCheckbox.checked !== shouldFollow) {
+      log(`Toggling follow checkbox: was=${followCheckbox.checked}, want=${shouldFollow}`, 'info');
+
+      // Method 1: Click the input directly
+      followCheckbox.click();
+
+      // Check if it worked
+      if (followCheckbox.checked !== shouldFollow) {
+        // Method 2: Click the parent label
+        const label = followCheckbox.closest('label') ||
+                      document.querySelector(`label[for="${followCheckbox.id}"]`);
+        if (label) label.click();
+      }
+
+      // Check again
+      if (followCheckbox.checked !== shouldFollow) {
+        // Method 3: Force the value
+        followCheckbox.checked = shouldFollow;
+        followCheckbox.dispatchEvent(new Event('change', { bubbles: true }));
+        followCheckbox.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+
+      log(`Follow checkbox final state: ${followCheckbox.checked}`, 'info');
+    }
+  } catch (e) {
+    console.warn('[JobPilot] handleFollowCompany error:', e.message);
+  }
 }
 
 /**
  * Discard the current application (close modal and confirm discard).
+ * Returns a promise that resolves after discard completes.
  */
-function discardApplication() {
+async function discardApplication() {
   try {
     pressEscape();
-    setTimeout(() => {
-      const discardBtn = findButtonByText(document, 'Discard');
-      if (discardBtn) discardBtn.click();
-    }, 500);
+    await new Promise(resolve => setTimeout(resolve, 800));
+    const discardBtn = findButtonByText(document, 'Discard');
+    if (discardBtn) {
+      discardBtn.click();
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   } catch (e) { /* ignore */ }
 }
 
 /**
  * Extract years of experience requirement from job description text.
+ * Uses stricter patterns to avoid matching years like "2020" or unrelated numbers.
  */
 function extractExperience(text) {
-  const matches = text.match(/[(]?\s*(\d+)\s*[)]?\s*[-to]*\s*\d*[+]*\s*year[s]?/gi);
-  if (!matches) return 0;
-  const numbers = matches.map(m => {
-    const num = m.match(/(\d+)/);
-    return num ? parseInt(num[1]) : 0;
-  }).filter(n => n <= 12);
+  // Match patterns like "3+ years", "3-5 years", "3 to 5 years", "(3) years"
+  // Exclude 4-digit numbers (years like 2020) and numbers > 20
+  const patterns = [
+    /\b(\d{1,2})\s*\+?\s*years?\s+(?:of\s+)?(?:experience|exp)/gi,
+    /\b(\d{1,2})\s*[-–to]+\s*\d{1,2}\s*\+?\s*years?\s+(?:of\s+)?(?:experience|exp)/gi,
+    /(?:at least|minimum|min)\s*(\d{1,2})\s*\+?\s*years?/gi,
+    /(\d{1,2})\s*\+?\s*years?\s+(?:of\s+)?(?:relevant|professional|hands-on|industry)/gi,
+  ];
+
+  const numbers = [];
+  for (const pattern of patterns) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const num = parseInt(match[1]);
+      // Filter out unreasonable values (> 15 years is likely a false positive)
+      if (num > 0 && num <= 15) {
+        numbers.push(num);
+      }
+    }
+  }
+
   return numbers.length > 0 ? Math.max(...numbers) : 0;
 }

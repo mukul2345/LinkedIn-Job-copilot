@@ -4,6 +4,8 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.js'],
   setupFiles: ['<rootDir>/tests/setup.js'],
+  // Allow resolving modules from functions/node_modules for Cloud Function tests
+  modulePaths: ['<rootDir>/functions/node_modules'],
   // Note: Coverage instrumentation doesn't work with eval()-loaded scripts.
   // The content script modules are loaded via eval() to simulate Chrome's
   // content script injection (shared global scope). Coverage is verified

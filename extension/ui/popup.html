@@ -136,7 +136,9 @@
 
     <!-- Navigation Tabs -->
     <nav class="tabs">
-      <button class="tab active" data-tab="status">Status</button>
+      <button class="tab active" data-tab="jobs">Jobs</button>
+      <button class="tab" data-tab="tracker">Tracker</button>
+      <button class="tab" data-tab="status">Status</button>
       <button class="tab" data-tab="profile">Profile</button>
       <button class="tab" data-tab="search">Search</button>
       <button class="tab" data-tab="questions">Q&A</button>
@@ -144,8 +146,130 @@
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
 
+    <!-- Jobs Tab -->
+    <section id="jobs" class="tab-content active">
+      <h2>Multi-Board Job Search</h2>
+
+      <!-- Search Input -->
+      <div class="form-group">
+        <div class="search-input-row">
+          <input type="text" id="jobSearchQuery" placeholder="Backend Developer, Software Engineer...">
+          <button id="jobSearchBtn" class="btn btn-primary btn-search">🔍 Search</button>
+        </div>
+      </div>
+
+      <!-- Board Selection -->
+      <div class="board-checkboxes">
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-linkedin" value="linkedin" checked>
+          <span>LinkedIn</span>
+        </label>
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-indeed" value="indeed" checked>
+          <span>Indeed</span>
+        </label>
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-glassdoor" value="glassdoor" checked>
+          <span>Glassdoor</span>
+        </label>
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-naukri" value="naukri">
+          <span>Naukri</span>
+        </label>
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-uplers" value="uplers">
+          <span>Uplers</span>
+        </label>
+        <label class="board-checkbox">
+          <input type="checkbox" id="board-adzuna" value="adzuna">
+          <span>Adzuna</span>
+        </label>
+      </div>
+
+      <!-- Filter Row -->
+      <div class="filter-row">
+        <select id="filterJobType" class="filter-select">
+          <option value="">Job Type</option>
+          <option value="full-time">Full-time</option>
+          <option value="part-time">Part-time</option>
+          <option value="contract">Contract</option>
+          <option value="internship">Internship</option>
+        </select>
+        <select id="filterDatePosted" class="filter-select">
+          <option value="">Date Posted</option>
+          <option value="24h">Past 24 hours</option>
+          <option value="week">Past week</option>
+          <option value="month">Past month</option>
+        </select>
+        <select id="filterSponsorship" class="filter-select">
+          <option value="">Sponsorship</option>
+          <option value="available">Available</option>
+          <option value="unlikely">Unlikely</option>
+          <option value="unknown">Unknown</option>
+        </select>
+        <input type="number" id="filterMinScore" class="filter-input" placeholder="Min Score" min="0" max="100">
+        <select id="filterSort" class="filter-select">
+          <option value="relevance">Sort: Relevance</option>
+          <option value="fitScore">Sort: Fit Score</option>
+          <option value="date">Sort: Date</option>
+        </select>
+      </div>
+
+      <!-- Resume Upload Section -->
+      <div id="resumeUploadSection" class="resume-upload-section">
+        <button id="uploadResumeBtn" class="btn btn-secondary btn-sm">📄 Upload Resume</button>
+        <span class="hint" id="resumeUploadHint">Upload your base resume for tailoring</span>
+      </div>
+
+      <!-- Results Container -->
+      <div id="jobResults" class="job-results">
+        <p class="job-results-empty">Search across multiple job boards. Select boards and enter a query to begin.</p>
+      </div>
+
+      <!-- Pagination -->
+      <div id="jobPagination" class="job-pagination" style="display: none;">
+        <button id="jobPrevPage" class="btn btn-secondary btn-sm">← Prev</button>
+        <span id="jobPageInfo" class="page-info">Page 1 of 1</span>
+        <button id="jobNextPage" class="btn btn-secondary btn-sm">Next →</button>
+      </div>
+    </section>
+
+    <!-- Tracker Tab -->
+    <section id="tracker" class="tab-content">
+      <h2>Application Tracker</h2>
+
+      <!-- Gmail Connection Section -->
+      <div id="gmailConnectSection" class="gmail-connect-section">
+        <div class="gmail-connect-card">
+          <p class="hint">Connect your Gmail to automatically detect interview invitations, rejections, and offers.</p>
+          <button id="gmailConnectBtn" class="btn btn-primary">📧 Connect Gmail</button>
+        </div>
+      </div>
+
+      <!-- Tracker Dashboard (shown when Gmail is connected) -->
+      <div id="trackerDashboard" class="tracker-dashboard" style="display: none;">
+        <div class="tracker-header">
+          <div class="tracker-status">
+            <span class="dot dot-success"></span>
+            <span id="trackerStatusText">Gmail Connected</span>
+          </div>
+          <button id="scanNowBtn" class="btn btn-secondary btn-sm">🔄 Scan Now</button>
+        </div>
+        <div id="trackerLastScan" class="hint">Last scan: Never</div>
+
+        <!-- Tracker Entries List -->
+        <div id="trackerEntries" class="tracker-entries">
+          <p class="tracker-entries-empty">No application updates detected yet. Click "Scan Now" or wait for the next automatic scan.</p>
+        </div>
+
+        <div class="tracker-footer">
+          <a href="#" id="gmailDisconnectLink" class="link-danger">Disconnect Gmail</a>
+        </div>
+      </div>
+    </section>
+
     <!-- Status Tab -->
-    <section id="status" class="tab-content active">
+    <section id="status" class="tab-content">
       <div class="status-card">
         <div class="status-indicator" id="statusIndicator">
           <span class="dot"></span>
@@ -384,6 +508,11 @@
         <textarea id="coverLetter" rows="6" placeholder="Dear Hiring Manager..."></textarea>
       </div>
       <button id="saveQuestions" class="btn btn-primary">Save Answers</button>
+
+      <h2>Skills & Experience</h2>
+      <p class="hint">Add your skills with years of experience. The bot uses this to fill "How many years of X experience?" questions accurately.</p>
+      <div id="skillMapEditorContainer"></div>
+      <button id="saveSkillMap" class="btn btn-primary" style="margin-top: 10px;">Save Skills</button>
     </section>
 
     <!-- Pricing Tab -->
@@ -478,9 +607,14 @@
 
       <h2>HR Outreach Settings</h2>
       <div class="form-group">
-        <label for="hrMessageTemplate">Message Template</label>
-        <textarea id="hrMessageTemplate" rows="5" placeholder="Hi {name}, I'm a Backend Developer with 3+ years of experience..."></textarea>
-        <small>Use {name} for recruiter's first name</small>
+        <label for="hrMessageTemplate">HR Message Template</label>
+        <textarea id="hrMessageTemplate" rows="5" placeholder="Hi {name}, I'm a [your role] with {experience}+ years in {headline}. I'm exploring new opportunities and wanted to check if there are relevant openings at {company}. Thank you!"></textarea>
+        <small>Placeholders: {name}, {jobTitle}, {company}, {experience}, {headline}, {myName}</small>
+      </div>
+      <div class="form-group">
+        <label for="recruiterMessageTemplate">Post-Apply Recruiter Message Template</label>
+        <textarea id="recruiterMessageTemplate" rows="5" placeholder="Hi {name}, I just applied for the {jobTitle} role at {company}. I have {experience}+ years in {headline} and believe my skills align well. Would you be open to a brief conversation? Best, {myName}"></textarea>
+        <small>Sent to hiring managers after applying. Placeholders: {name}, {jobTitle}, {company}, {experience}, {headline}, {myName}</small>
       </div>
       <div class="form-group">
         <label for="hrDailyLimit">Max messages per day</label>
@@ -517,6 +651,11 @@
   </div>
   <script src="../core/constants.js"></script>
   <script src="../core/firebase.js"></script>
+  <script src="../modules/database/cache-manager.js"></script>
+  <script src="../modules/database/firestore-service.js"></script>
+  <script src="../modules/shared/api-client.js"></script>
+  <script src="../modules/shared/validators.js"></script>
+  <script src="../modules/shared/filters.js"></script>
   <script src="../modules/auth/auth-service.js"></script>
   <script src="../modules/database/user-repository.js"></script>
   <script src="../modules/database/sync-service.js"></script>
@@ -524,7 +663,14 @@
   <script src="../modules/database/usage-repository.js"></script>
   <script src="../modules/subscription/plan-service.js"></script>
   <script src="../modules/subscription/payment-service.js"></script>
+  <script src="../modules/resume/resume-service.js"></script>
+  <script src="../modules/search/search-service.js"></script>
+  <script src="../modules/fit-score/fit-score-service.js"></script>
+  <script src="../modules/visa/visa-service.js"></script>
+  <script src="../modules/tracker/tracker-service.js"></script>
   <script src="screens/pricing-screen.js"></script>
+  <script src="components/skill-map-editor.js"></script>
   <script src="popup.js"></script>
+  <script src="jobs-tracker-handlers.js"></script>
 </body>
 </html>

@@ -29,14 +29,14 @@ async function answerFormQuestions(modal, config) {
       // Handle TEXT inputs
       const textInput = question.querySelector('input[type="text"], input:not([type])');
       if (textInput && textInput.type !== 'hidden' && textInput.type !== 'checkbox' && textInput.type !== 'radio') {
-        handleTextQuestion(question, textInput, config);
+        await handleTextQuestion(question, textInput, config);
         continue;
       }
 
       // Handle NUMBER inputs
       const numInput = question.querySelector('input[type="number"]');
       if (numInput) {
-        handleTextQuestion(question, numInput, config);
+        await handleTextQuestion(question, numInput, config);
         continue;
       }
 
@@ -47,10 +47,28 @@ async function answerFormQuestions(modal, config) {
         continue;
       }
 
-      // Handle CHECKBOX
+      // Handle CHECKBOX - only check if it's likely a consent/agreement checkbox
+      // that the user would want checked (not marketing, relocation, etc.)
       const checkbox = question.querySelector('input[type="checkbox"]');
       if (checkbox && !checkbox.checked) {
-        checkbox.click();
+        const checkboxLabel = getQuestionLabel(question).toLowerCase();
+        // Only auto-check boxes that are clearly about acknowledging info or agreeing to process
+        const safeToCheck = [
+          'acknowledge', 'confirm', 'certify', 'agree to the terms',
+          'i agree', 'i confirm', 'i certify', 'i acknowledge',
+          'i understand', 'authorization'
+        ];
+        const unsafePatterns = [
+          'marketing', 'newsletter', 'subscribe', 'opt-in', 'opt in',
+          'promotions', 'offers', 'contact me', 'share my', 'third party',
+          'relocat', 'commute', 'travel'
+        ];
+        const isSafe = safeToCheck.some(s => checkboxLabel.includes(s));
+        const isUnsafe = unsafePatterns.some(s => checkboxLabel.includes(s));
+        if (isSafe && !isUnsafe) {
+          checkbox.click();
+        }
+        // If unclear, leave unchecked — user can manually check
         continue;
       }
     } catch (e) {
@@ -177,7 +195,7 @@ function handleRadioQuestion(question, fieldset, config) {
 /**
  * Handle a TEXT or NUMBER input question.
  */
-function handleTextQuestion(question, input, config) {
+async function handleTextQuestion(question, input, config) {
   const currentValue = input.value.trim();
   if (currentValue) return;
 
@@ -187,7 +205,7 @@ function handleTextQuestion(question, input, config) {
   const fullName = [config.firstName, config.middleName, config.lastName].filter(Boolean).join(' ');
 
   if (label.includes('experience') || label.includes('years')) {
-    answer = getSkillExperience(label) || config.yearsOfExperience || '3';
+    answer = getSkillExperience(label, config) || config.yearsOfExperience || '3';
   } else if (label.includes('phone') || label.includes('mobile')) {
     answer = config.phoneNumber || '';
   } else if (label.includes('street')) {
@@ -235,7 +253,7 @@ function handleTextQuestion(question, input, config) {
   } else if (label.includes('how did you hear') || label.includes('come across') || label.includes('referral source')) {
     answer = 'LinkedIn';
   } else {
-    answer = getSmartFallback(label, input.type);
+    answer = await getSmartFallback(label, input.type, config);
   }
 
   if (answer) {
@@ -319,36 +337,38 @@ function selectBestOption(select, answer) {
 }
 
 /**
- * Determine years of experience for specific skills.
+ * Determine years of experience for specific skills from user's skill map.
+ * Reads from config.skillMap (populated from Firestore via chrome.storage.local).
+ * Falls back to user's general yearsOfExperience if no match found.
  */
-function getSkillExperience(label) {
-  const skillMap = {
-    'node': '3', 'nodejs': '3', 'node.js': '3',
-    'javascript': '3', 'typescript': '3',
-    'python': '2', 'aws': '2', 'backend': '3',
-    'mongodb': '2', 'express': '3', 'rest': '3', 'api': '3',
-    'microservice': '2', 'git': '3', 'sql': '2', 'mysql': '2',
-    'dynamodb': '2', 'docker': '1', 'solidity': '1',
-    'blockchain': '1', 'web3': '1', 'ethereum': '1',
-    'c++': '3', 'java': '2', 'react': '1',
-    'kubernetes': '1', 'k8s': '1', 'ci/cd': '2', 'ci cd': '2',
-    'lambda': '2', 'sqs': '2', 'sns': '1',
-    'redis': '1', 'kafka': '1', 'graphql': '1',
-    'terraform': '1', 'linux': '2', 'agile': '3', 'scrum': '2',
-    'angular': '0', '.net': '0', 'ruby': '0', 'php': '0',
-    'swift': '0', 'kotlin': '0', 'flutter': '0',
-  };
+function getSkillExperience(label, config) {
+  const skillMap = config && config.skillMap ? config.skillMap : {};
+  const labelLower = label.toLowerCase();
 
+  // Look for a matching skill in the user's configured map
   for (const [skill, years] of Object.entries(skillMap)) {
-    if (label.includes(skill)) return years;
+    if (labelLower.includes(skill.toLowerCase())) {
+      return String(years);
+    }
   }
+
+  // No match found — return null so caller uses general fallback
   return null;
 }
 
 /**
  * Smart fallback for completely unknown questions.
+ * If AI is enabled, attempts to get an AI-generated answer first.
  */
-function getSmartFallback(label, inputType) {
+async function getSmartFallback(label, inputType, config) {
+  // Try AI if available
+  if (config && config.useAI && typeof getAIFormAnswer === 'function') {
+    const jobTitle = config._currentJobTitle || '';
+    const company = config._currentCompany || '';
+    const aiAnswer = await getAIFormAnswer(label, jobTitle, company, config);
+    if (aiAnswer) return aiAnswer;
+  }
+
   if (label.includes('have you') || label.includes('do you') || label.includes('are you') ||
       label.includes('can you') || label.includes('will you') || label.includes('willing')) {
     return 'Yes';
