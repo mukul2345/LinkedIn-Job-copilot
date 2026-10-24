@@ -6,8 +6,9 @@
  *
  * Configuration via environment variables:
  *   AI_PROVIDER   - "openai" | "gemini" | "deepseek" (default: "openai")
- *   OPENAI_API_KEY  - API key for OpenAI
- *   GEMINI_API_KEY  - API key for Gemini (via OpenAI-compatible endpoint)
+ *   AI_API_KEY      - Shared key used by the selected OpenAI/Gemini provider
+ *   OPENAI_API_KEY  - Optional OpenAI-specific override
+ *   GEMINI_API_KEY  - Optional Gemini-specific override
  *   DEEPSEEK_API_KEY - API key for DeepSeek
  *
  * Usage:
@@ -19,12 +20,12 @@ const PROVIDER_CONFIG = {
   openai: {
     baseUrl: 'https://api.openai.com/v1',
     defaultModel: 'gpt-4o-mini',
-    getApiKey: () => process.env.OPENAI_API_KEY || '',
+    getApiKey: () => process.env.OPENAI_API_KEY || process.env.AI_API_KEY || '',
   },
   gemini: {
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
     defaultModel: 'gemini-2.0-flash',
-    getApiKey: () => process.env.GEMINI_API_KEY || '',
+    getApiKey: () => process.env.GEMINI_API_KEY || process.env.AI_API_KEY || '',
   },
   deepseek: {
     baseUrl: 'https://api.deepseek.com/v1',

@@ -24,8 +24,8 @@ describe('LINKEDIN_SAFETY_LIMITS', () => {
   });
 
   it('should define minimum delays', () => {
-    expect(LINKEDIN_SAFETY_LIMITS.minDelay.betweenApps).toBe(30);
-    expect(LINKEDIN_SAFETY_LIMITS.minDelay.betweenMessages).toBe(45);
+    expect(LINKEDIN_SAFETY_LIMITS.minDelay.betweenApps).toBe(3);
+    expect(LINKEDIN_SAFETY_LIMITS.minDelay.betweenMessages).toBe(20);
   });
 });
 
@@ -104,8 +104,8 @@ describe('getAdaptiveDelay()', () => {
     });
 
     const delay = await getAdaptiveDelay('applications', 1000);
-    // Minimum is 30s for applications
-    expect(delay).toBeGreaterThanOrEqual(25000); // 30s - 30% jitter
+    // Minimum is 3s for applications (fast default floor).
+    expect(delay).toBeGreaterThanOrEqual(3000);
   });
 
   it('should increase delay when past safe limit', async () => {
@@ -134,8 +134,8 @@ describe('getAdaptiveDelay()', () => {
     });
 
     const delay = await getAdaptiveDelay('hrMessages', 1000);
-    // Minimum is 45s for messages
-    expect(delay).toBeGreaterThanOrEqual(30000); // 45s - 30% jitter
+    // Minimum is 20s for messages.
+    expect(delay).toBeGreaterThanOrEqual(20000);
   });
 });
 

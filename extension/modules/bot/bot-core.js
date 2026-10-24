@@ -15,7 +15,9 @@ async function startBot(state) {
   log('Bot started! Loading configuration...', 'info');
 
   const config = await getStorage(null);
-  state.config = config;
+  state.config = typeof CandidateProfileSnapshot !== 'undefined'
+    ? { ...config, candidateProfileSnapshot: CandidateProfileSnapshot.fromConfig(config) }
+    : config;
   state.applicationHistory = config.applicationHistory || [];
 
   // Prune old application history to prevent unbounded growth
@@ -100,7 +102,7 @@ function stopBot(state) {
   chrome.storage.local.remove('botState');
 
   sendStatus(state.appliedCount, state.skippedCount, state.failedCount);
-  chrome.runtime.sendMessage({ type: 'stopped' }).catch(() => {});
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.STOPPED)).catch(() => {});
 }
 
 /**
@@ -155,15 +157,6 @@ async function runSearchLoop(state) {
       for (const card of jobCards) {
         if (state.stopRequested || appliedThisTerm >= maxPerTerm) break;
 
-        // Check subscription plan limit before applying
-        const limitCheck = await canPerformAction('applications');
-        if (!limitCheck.allowed) {
-          log(limitCheck.reason, 'warning');
-          showUpgradeModal(limitCheck.reason, limitCheck.current, limitCheck.limit);
-          state.stopRequested = true;
-          break;
-        }
-
         // Enforce daily safety limit (hard cap regardless of plan)
         const today = new Date().toISOString().split('T')[0];
         const todayTotal = state.applicationHistory.filter(h => h.date && h.date.startsWith(today)).length;
@@ -178,11 +171,45 @@ async function runSearchLoop(state) {
           if (result === 'applied') {
             appliedThisTerm++;
             state.appliedCount++;
-            await incrementApplicationCount(); // Track for plan limits
           } else if (result === 'skipped') {
             state.skippedCount++;
           } else if (result === 'failed') {
             state.failedCount++;
+          } else if (result?.status === 'needs_user_input') {
+            // Unanswerable questions: discard this application and move on.
+            state.skippedCount++;
+            log(`Skipped: unanswerable form fields, moving to next job.`, 'info');
+          } else if (result?.status === 'review_required') {
+            // User declined the confirmation prompt: skip, not stop.
+            state.skippedCount++;
+            log('Skipped: review was declined, moving to next job.', 'info');
+          } else if (result?.status === 'manual_intervention') {
+            // CAPTCHA/MFA/authwall: the whole page is blocked, must stop.
+            state.failedCount++;
+            log(`Manual intervention required: ${result.reason || 'verification challenge'}.`, 'warning');
+            showSafetyAlert('Complete the LinkedIn verification step manually. Automation will not bypass it.', 'danger');
+            state.stopRequested = true;
+            break;
+          } else if (result?.status === 'submission_unconfirmed') {
+            // Uncertain click: stop to avoid duplicate retry on same job.
+            state.failedCount++;
+            log('LinkedIn did not confirm the submission. Stopping to avoid a duplicate.', 'error');
+            state.stopRequested = true;
+            break;
+          } else if (result?.status === 'quota_unavailable') {
+            // Transient service failure: skip this one, try the next.
+            state.skippedCount++;
+            log('Quota service temporarily unavailable. Skipping this job.', 'warning');
+          } else if (result?.status === 'limit_reached') {
+            // Genuine monthly exhaustion: stop the run.
+            log(`Monthly limit reached (${result.quota?.used}/${result.quota?.limit}). Upgrade for more.`, 'warning');
+            showUpgradeModal(
+              `Monthly application limit reached on ${result.quota?.plan || 'free'} plan.`,
+              result.quota?.used || 0,
+              result.quota?.limit || 0,
+            );
+            state.stopRequested = true;
+            break;
           }
         } catch (e) {
           state.failedCount++;
@@ -221,6 +248,33 @@ async function runSearchLoop(state) {
 
   chrome.storage.local.remove('botState');
   log('All search terms processed!', 'success');
+}
+
+/**
+ * Present an application-quota denial returned by the submit flow.
+ * Service/auth failures use a connectivity alert; only genuine exhaustion
+ * opens the upgrade UI.
+ *
+ * @param {object|string} result - processJobCard result
+ * @returns {boolean} Whether the result was a quota denial
+ */
+function presentApplicationQuotaDenial(result) {
+  if (result?.status === 'quota_unavailable') {
+    const message = 'Unable to verify your application quota. Check your connection and try again.';
+    log(message, 'error');
+    showSafetyAlert(message, 'danger');
+    return true;
+  }
+
+  if (result?.status === 'limit_reached') {
+    const quota = result.quota;
+    const reason = `Monthly application limit reached (${quota.used}/${quota.limit} on ${quota.plan} plan). Upgrade to Pro for more.`;
+    log(reason, 'warning');
+    showUpgradeModal(reason, quota.used, quota.limit);
+    return true;
+  }
+
+  return false;
 }
 
 /**

@@ -72,7 +72,7 @@ describe('selectBestOption()', () => {
     expect(select.value).toBe('bach');
   });
 
-  it('should select first non-placeholder if no match', () => {
+  it('should leave the placeholder selected if no option matches', () => {
     document.body.innerHTML = `
       <select id="sel">
         <option value="">Select an option</option>
@@ -82,7 +82,7 @@ describe('selectBestOption()', () => {
     `;
     const select = document.getElementById('sel');
     selectBestOption(select, 'NonExistent');
-    expect(select.selectedIndex).toBe(1);
+    expect(select.selectedIndex).toBe(0);
   });
 
   it('should dispatch change event', () => {
@@ -103,56 +103,43 @@ describe('selectBestOption()', () => {
 
 // ===== getSkillExperience() =====
 describe('getSkillExperience()', () => {
-  it('should return years for known skills', () => {
-    expect(getSkillExperience('how many years of node.js experience')).toBe('3');
-    expect(getSkillExperience('python experience in years')).toBe('2');
-    expect(getSkillExperience('docker experience')).toBe('1');
-    expect(getSkillExperience('kubernetes experience')).toBe('1');
+  const config = {
+    skillMap: { 'node.js': 3, python: 2, docker: 1, kubernetes: 1, angular: 0, flutter: 0, javascript: 3, aws: 2 },
+  };
+
+  it('should return years for explicitly configured skills', () => {
+    expect(getSkillExperience('how many years of node.js experience', config)).toBe('3');
+    expect(getSkillExperience('python experience in years', config)).toBe('2');
+    expect(getSkillExperience('docker experience', config)).toBe('1');
+    expect(getSkillExperience('kubernetes experience', config)).toBe('1');
   });
 
-  it('should return "0" for skills with no experience', () => {
-    expect(getSkillExperience('angular experience')).toBe('0');
-    expect(getSkillExperience('flutter development years')).toBe('0');
+  it('should preserve an explicitly configured zero', () => {
+    expect(getSkillExperience('angular experience', config)).toBe('0');
+    expect(getSkillExperience('flutter development years', config)).toBe('0');
   });
 
   it('should return null for unknown skills', () => {
-    expect(getSkillExperience('how many years of cooking')).toBeNull();
-    expect(getSkillExperience('random question')).toBeNull();
+    expect(getSkillExperience('how many years of cooking', config)).toBeNull();
+    expect(getSkillExperience('random question', config)).toBeNull();
   });
 
-  it('should be case-insensitive in matching', () => {
-    // getSkillExperience checks label.includes(skill) where label is already lowercased
-    // by the caller (handleTextQuestion). So we test with lowercase.
-    expect(getSkillExperience('javascript experience')).toBe('3');
-    expect(getSkillExperience('aws cloud experience')).toBe('2');
+  it('should match configured skills case-insensitively', () => {
+    expect(getSkillExperience('javascript experience', config)).toBe('3');
+    expect(getSkillExperience('aws cloud experience', config)).toBe('2');
   });
 });
 
 // ===== getSmartFallback() =====
 describe('getSmartFallback()', () => {
-  it('should return "Yes" for yes/no type questions', () => {
-    expect(getSmartFallback('have you worked with teams', 'text')).toBe('Yes');
-    expect(getSmartFallback('do you have experience', 'text')).toBe('Yes');
-    expect(getSmartFallback('are you willing to relocate', 'text')).toBe('Yes');
-    expect(getSmartFallback('can you start immediately', 'text')).toBe('Yes');
-  });
-
-  it('should return "3" for "how many" questions', () => {
-    // Use a string that doesn't trigger the yes/no patterns
-    expect(getSmartFallback('how many certifications obtained', 'text')).toBe('3');
-  });
-
-  it('should return "8" for rate/proficiency questions', () => {
-    expect(getSmartFallback('rate your proficiency in java', 'text')).toBe('8');
-    expect(getSmartFallback('what is your level of expertise', 'text')).toBe('8');
-  });
-
-  it('should return "3" for number inputs', () => {
-    expect(getSmartFallback('some random question', 'number')).toBe('3');
-  });
-
-  it('should return "3" as ultimate fallback', () => {
-    expect(getSmartFallback('completely unknown question', 'text')).toBe('3');
+  it.each([
+    ['have you worked with teams', 'text'],
+    ['how many certifications obtained', 'text'],
+    ['rate your proficiency in java', 'text'],
+    ['some random question', 'number'],
+    ['completely unknown question', 'text'],
+  ])('should require user input instead of guessing for %s', async (label, inputType) => {
+    await expect(getSmartFallback(label, inputType)).resolves.toBeNull();
   });
 });
 
@@ -177,6 +164,7 @@ describe('handleTextQuestion()', () => {
     recentEmployer: 'TechCorp',
     confidenceLevel: '9',
     linkedinHeadline: 'Backend Developer',
+    skillMap: { 'node.js': 3 },
   };
 
   function createQuestion(labelText, inputType = 'text') {
@@ -278,10 +266,10 @@ describe('handleTextQuestion()', () => {
     expect(input.value).toBe('already filled');
   });
 
-  it('should fill "LinkedIn" for referral source questions', () => {
+  it('should leave referral source blank when it is not configured', async () => {
     const { question, input } = createQuestion('How did you hear about us');
-    handleTextQuestion(question, input, config);
-    expect(input.value).toBe('LinkedIn');
+    await handleTextQuestion(question, input, config);
+    expect(input.value).toBe('');
   });
 
   it('should use skill-specific experience for skill questions', () => {
@@ -302,6 +290,7 @@ describe('handleSelectQuestion()', () => {
     state: 'Karnataka',
     currentCity: 'Bangalore',
     requireVisa: 'No',
+    workAuthorization: 'Yes',
   };
 
   function createSelectQuestion(labelText, options) {
@@ -353,6 +342,7 @@ describe('handleRadioQuestion()', () => {
     gender: 'Male',
     veteranStatus: 'No',
     disabilityStatus: 'No',
+    willingToRelocate: 'Yes',
   };
 
   function createRadioQuestion(labelText, options) {
@@ -408,11 +398,39 @@ describe('handleRadioQuestion()', () => {
     expect(firstRadio.checked).toBe(true);
   });
 
-  it('should select first option as last resort', () => {
+  it('should leave an unknown non-yes/no radio unanswered', () => {
     const { question, fieldset } = createRadioQuestion('Unknown question type', ['Option X', 'Option Y']);
+    handleRadioQuestion(question, fieldset, config);
+    expect(fieldset.querySelector('input:checked')).toBeNull();
+  });
+
+  it('should default an unmapped Yes/No capability question to Yes so the run continues', () => {
+    const { question, fieldset } = createRadioQuestion(
+      "Have you completed the following level of education: Doctor of Philosophy?",
+      ['Yes', 'No'],
+    );
     handleRadioQuestion(question, fieldset, config);
     const checked = fieldset.querySelector('input:checked');
     expect(checked).not.toBeNull();
+    expect(checked.value).toBe('yes');
+  });
+
+  it('should not auto-answer legal/consent Yes/No attestations', () => {
+    const { question, fieldset } = createRadioQuestion(
+      'Do you agree to the terms and consent to processing?',
+      ['Yes', 'No'],
+    );
+    handleRadioQuestion(question, fieldset, config);
+    expect(fieldset.querySelector('input:checked')).toBeNull();
+  });
+
+  it('should respect the autoAnswerYesNo opt-out flag', () => {
+    const { question, fieldset } = createRadioQuestion(
+      'Do you have experience with machine tools?',
+      ['Yes', 'No'],
+    );
+    handleRadioQuestion(question, fieldset, { ...config, autoAnswerYesNo: false });
+    expect(fieldset.querySelector('input:checked')).toBeNull();
   });
 });
 
@@ -439,7 +457,7 @@ describe('answerFormQuestions()', () => {
     expect(modal.querySelector('input').value).toBe('9876543210');
   });
 
-  it('should check unchecked checkboxes', async () => {
+  it('should leave an unlabeled checkbox for user review', async () => {
     document.body.innerHTML = `
       <div id="modal">
         <div data-test-form-element>
@@ -449,7 +467,22 @@ describe('answerFormQuestions()', () => {
     `;
     const modal = document.getElementById('modal');
     await answerFormQuestions(modal, config);
-    expect(modal.querySelector('input[type="checkbox"]').checked).toBe(true);
+    expect(modal.querySelector('input[type="checkbox"]').checked).toBe(false);
+  });
+
+  it('should not auto-check a labeled legal consent checkbox', async () => {
+    document.body.innerHTML = `
+      <div id="modal">
+        <div data-test-form-element>
+          <label><span>I agree to the terms and certify this application</span></label>
+          <input type="checkbox" required />
+        </div>
+      </div>
+    `;
+    const modal = document.getElementById('modal');
+    const outcome = await answerFormQuestions(modal, config);
+    expect(modal.querySelector('input[type="checkbox"]').checked).toBe(false);
+    expect(outcome.needsUserInput).toEqual(['I agree to the terms and certify this application']);
   });
 
   it('should handle multiple form elements', async () => {

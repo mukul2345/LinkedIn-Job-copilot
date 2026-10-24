@@ -34,6 +34,20 @@ const { uploadResume, tailorResume } = require('./resume');
 const { computeFitScore, recomputeScores } = require('./scoring');
 const { scanGmail } = require('./tracker');
 const { classifySponsorship } = require('./visa');
+const { checkAndConsumeQuota } = require('./quota-service');
+const { matchJobsForUser, matchCurrentJobForUser } = require('./job-matching');
+const { generateAiAssistance } = require('./ai-assistance');
+const {
+  createSearchSession,
+  resumeSearchSession,
+  getSearchSession,
+  cancelSearchSession,
+} = require('./search-sessions');
+const {
+  recordApplicationOutcome,
+  getApplicationHistory,
+  checkApplicationApplied,
+} = require('./application-history');
 
 // Re-export enhanced feature functions
 exports.searchJobs = searchJobs;
@@ -43,14 +57,28 @@ exports.computeFitScore = computeFitScore;
 exports.recomputeScores = recomputeScores;
 exports.scanGmail = scanGmail;
 exports.classifySponsorship = classifySponsorship;
+exports.checkAndConsumeQuota = checkAndConsumeQuota;
+exports.matchJobsForUser = matchJobsForUser;
+exports.matchCurrentJobForUser = matchCurrentJobForUser;
+exports.generateAiAssistance = generateAiAssistance;
+exports.createSearchSession = createSearchSession;
+exports.resumeSearchSession = resumeSearchSession;
+exports.getSearchSession = getSearchSession;
+exports.cancelSearchSession = cancelSearchSession;
+exports.recordApplicationOutcome = recordApplicationOutcome;
+exports.getApplicationHistory = getApplicationHistory;
+exports.checkApplicationApplied = checkApplicationApplied;
 
 // ============================================================
 // ADMIN EMAIL CONFIGURATION
 // Add emails that should automatically get admin role on signup.
 // ============================================================
-const ADMIN_EMAILS = [
-  'mukul798348@gmail.com',
-];
+// Admin assignment is server-side only. Configure a comma-separated allowlist
+// through the deployment environment; never publish personal identities in source.
+const ADMIN_EMAILS = (process.env.ADMIN_EMAILS || '')
+  .split(',')
+  .map((email) => email.trim().toLowerCase())
+  .filter(Boolean);
 
 // Razorpay payment integration
 const { createRazorpaySession, handleRazorpayWebhook, activateProPlan } = require('./payments-razorpay');
@@ -175,6 +203,12 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
 
     const plan = PRICING[planId];
     const orderId = `order_${userId.substring(0, 8)}_${Date.now()}`;
+    const customerPhone = typeof decodedToken.phone_number === 'string'
+      ? decodedToken.phone_number.trim()
+      : '';
+    if (!customerPhone) {
+      return res.status(400).json({ error: 'A verified phone number is required for Cashfree checkout.' });
+    }
 
     // Create Cashfree order via API
     const orderPayload = {
@@ -185,7 +219,7 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
         customer_id: userId,
         customer_email: userEmail,
         customer_name: userName,
-        customer_phone: '9999999999',
+        customer_phone: customerPhone,
       },
       order_meta: {
         return_url: `https://us-central1-linkedin-jobcopilot.cloudfunctions.net/handlePaymentWebhook?order_id=${orderId}&type=return`,
@@ -216,6 +250,10 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
       return res.status(500).json({ error: 'Payment creation failed', details: result.message });
     }
 
+    if (!result.payment_link && !result.payment_session_id) {
+      return res.status(502).json({ error: 'Payment provider did not return checkout data.' });
+    }
+
     // Store order in Firestore for verification later
     await db.collection('orders').doc(orderId).set({
       orderId,
@@ -231,7 +269,7 @@ exports.createPaymentSession = functions.https.onRequest(async (req, res) => {
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    console.log(`[JobPilot] Order created: ${orderId} for ${userEmail} (${plan.label})`);
+    console.log('[JobPilot] Payment order created.', { orderId, planId });
 
     // Build checkout URL - use payment_link if available, otherwise use our hosted checkout page
     const checkoutUrl = result.payment_link ||
@@ -259,8 +297,12 @@ exports.handlePaymentWebhook = functions.https.onRequest(async (req, res) => {
   // Serve checkout page (redirects user to Cashfree payment)
   if (req.method === 'GET' && req.query.action === 'checkout') {
     const sessionId = req.query.session;
-    const env = req.query.env || 'production';
-    if (!sessionId) return res.status(400).send('Missing session');
+    const env = req.query.env === 'sandbox' ? 'sandbox' : 'production';
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]{10,512}$/.test(sessionId)) {
+      return res.status(400).send('Invalid payment session');
+    }
+    const serializedEnvironment = JSON.stringify(env);
+    const serializedSessionId = JSON.stringify(sessionId);
 
     return res.status(200).send(`<!DOCTYPE html>
 <html>
@@ -282,9 +324,9 @@ exports.handlePaymentWebhook = functions.https.onRequest(async (req, res) => {
     <p>Redirecting to payment...</p>
   </div>
   <script>
-    const cashfree = Cashfree({ mode: "${env}" });
+    const cashfree = Cashfree({ mode: ${serializedEnvironment} });
     cashfree.checkout({
-      paymentSessionId: "${sessionId}",
+      paymentSessionId: ${serializedSessionId},
       redirectTarget: "_self",
     });
   </script>
@@ -514,38 +556,50 @@ function verifyWebhookSignature(rawBody, signature, timestamp) {
 }
 
 // ============================================================
-// FUNCTION: Auto-assign admin role on user creation
-// Triggers when a new Firebase Auth user is created.
-// If their email is in ADMIN_EMAILS, sets admin custom claim + Firestore role.
+// FUNCTION: Auto-assign admin role after the user document exists
+//
+// Privileges are never chosen by extension code. New documents must start as
+// user/free (enforced by Firestore rules); this trusted trigger upgrades only
+// server-configured allowlist identities after creation, avoiding the race that
+// occurred when an Auth trigger ran before the client created users/{uid}.
 // ============================================================
-exports.onUserCreated = functions.auth.user().onCreate(async (user) => {
-  const email = user.email?.toLowerCase();
-  
-  if (!email || !ADMIN_EMAILS.includes(email)) {
-    return; // Not an admin — do nothing
-  }
+exports.onUserDocumentCreated = functions.firestore
+  .document('users/{uid}')
+  .onCreate(async (snapshot, context) => {
+    const uid = context.params.uid;
+    try {
+      // Resolve the identity from Firebase Auth. The Firestore email field is
+      // client-written and must never be used to grant privileges.
+      const authUser = await admin.auth().getUser(uid);
+      const email = String(authUser.email || '').trim().toLowerCase();
 
-  console.log(`[JobPilot] Admin user detected: ${email}. Setting admin role...`);
+      if (!email || !ADMIN_EMAILS.includes(email)) {
+        return null;
+      }
 
-  try {
-    // Set Firebase custom claim (for security rules)
-    await admin.auth().setCustomUserClaims(user.uid, { admin: true });
-
-    // Update Firestore user document (if it exists already)
-    const userDoc = await db.collection('users').doc(user.uid).get();
-    if (userDoc.exists) {
-      await db.collection('users').doc(user.uid).update({
-        role: 'admin',
-        plan: 'pro',
-        planExpiresAt: null, // Admin never expires
+      await Promise.all([
+        admin.auth().setCustomUserClaims(uid, {
+          ...(authUser.customClaims || {}),
+          admin: true,
+        }),
+        snapshot.ref.update({
+          role: 'admin',
+          plan: 'pro',
+          planExpiresAt: null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        }),
+      ]);
+      console.log('[JobPilot] Admin role assigned.', { uid });
+    } catch (error) {
+      console.error('[JobPilot] Failed to evaluate or assign admin role.', {
+        uid,
+        error: error instanceof Error ? error.stack : error,
       });
+      throw error;
     }
 
-    console.log(`[JobPilot] ✅ Admin role set for ${email} (uid: ${user.uid})`);
-  } catch (error) {
-    console.error(`[JobPilot] Failed to set admin role for ${email}:`, error);
-  }
-});
+    return null;
+  });
 
 // ============================================================
 // FUNCTION: Manual admin assignment (HTTP endpoint)

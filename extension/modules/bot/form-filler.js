@@ -1,5 +1,22 @@
 // form-filler.js - Easy Apply form question answering logic
 
+/** Resolve through the canonical snapshot when the runtime contract is loaded. */
+function resolveConfiguredAnswer(question, controlType, config) {
+  if (typeof AnswerResolver === 'undefined' || typeof CandidateProfileSnapshot === 'undefined') {
+    return null;
+  }
+  const candidateSnapshot = config.candidateProfileSnapshot || CandidateProfileSnapshot.fromConfig(config);
+  return AnswerResolver.resolve({ question, controlType, candidateSnapshot });
+}
+
+/** Apply a resolved value to a native text control. */
+function applyResolvedText(input, resolution) {
+  if (resolution?.status !== AnswerResolutionStatus.ANSWERED) return false;
+  setNativeValue(input, resolution.value);
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  return true;
+}
+
 /**
  * Answer all form questions on the current Easy Apply modal page.
  * @param {Element} modal - The Easy Apply modal element
@@ -47,28 +64,10 @@ async function answerFormQuestions(modal, config) {
         continue;
       }
 
-      // Handle CHECKBOX - only check if it's likely a consent/agreement checkbox
-      // that the user would want checked (not marketing, relocation, etc.)
+      // Checkboxes can represent legal attestations, privacy consent, marketing
+      // opt-ins, or material job preferences. Never infer consent from label text.
       const checkbox = question.querySelector('input[type="checkbox"]');
       if (checkbox && !checkbox.checked) {
-        const checkboxLabel = getQuestionLabel(question).toLowerCase();
-        // Only auto-check boxes that are clearly about acknowledging info or agreeing to process
-        const safeToCheck = [
-          'acknowledge', 'confirm', 'certify', 'agree to the terms',
-          'i agree', 'i confirm', 'i certify', 'i acknowledge',
-          'i understand', 'authorization'
-        ];
-        const unsafePatterns = [
-          'marketing', 'newsletter', 'subscribe', 'opt-in', 'opt in',
-          'promotions', 'offers', 'contact me', 'share my', 'third party',
-          'relocat', 'commute', 'travel'
-        ];
-        const isSafe = safeToCheck.some(s => checkboxLabel.includes(s));
-        const isUnsafe = unsafePatterns.some(s => checkboxLabel.includes(s));
-        if (isSafe && !isUnsafe) {
-          checkbox.click();
-        }
-        // If unclear, leave unchecked — user can manually check
         continue;
       }
     } catch (e) {
@@ -76,9 +75,22 @@ async function answerFormQuestions(modal, config) {
     }
   }
 
-  // Try to select today's date if date picker is present
-  const todayBtn = document.querySelector('button[aria-label*="today" i], button[aria-label*="This is today"]');
-  if (todayBtn) todayBtn.click();
+  // Date questions require explicit context; leave them for user review.
+  const needsUserInput = [...formElements]
+    .filter(question => {
+      const requiredField = question.querySelector('input[required], textarea[required], select[required], [aria-required="true"]');
+      if (!requiredField) return false;
+      const select = question.querySelector('select');
+      if (select) return !select.value;
+      const radios = [...question.querySelectorAll('input[type="radio"]')];
+      if (radios.length) return !radios.some(input => input.checked);
+      const field = question.querySelector('input:not([type="hidden"]), textarea');
+      if (!field) return false;
+      if (field.type === 'checkbox') return !field.checked;
+      return !String(field.value || '').trim();
+    })
+    .map(question => getQuestionLabel(question) || 'Required question');
+  return { needsUserInput };
 }
 
 /**
@@ -86,14 +98,15 @@ async function answerFormQuestions(modal, config) {
  */
 function handleSelectQuestion(question, select, config) {
   const selectedOption = select.options[select.selectedIndex];
-  if (selectedOption && selectedOption.value && selectedOption.text !== 'Select an option') {
-    return; // Already answered
-  }
+  if (selectedOption && selectedOption.value && selectedOption.text !== 'Select an option') return;
 
   const label = getQuestionLabel(question).toLowerCase();
-  let answer = 'Yes';
-
-  if (label.includes('gender') || label.includes('sex')) {
+  const resolution = resolveConfiguredAnswer(label, 'select', config);
+  let answer = null;
+  if (resolution) {
+    if (resolution.status !== AnswerResolutionStatus.ANSWERED) return;
+    answer = resolution.value;
+  } else if (label.includes('gender') || label.includes('sex')) {
     answer = config.gender || 'Decline';
   } else if (label.includes('disability')) {
     answer = config.disabilityStatus || 'Decline';
@@ -102,26 +115,26 @@ function handleSelectQuestion(question, select, config) {
   } else if (label.includes('ethnicity') || label.includes('race')) {
     answer = config.ethnicity || 'Decline';
   } else if (label.includes('country')) {
-    answer = config.country || 'India';
+    answer = config.country || null;
   } else if (label.includes('state') || label.includes('province')) {
-    answer = config.state || 'Karnataka';
+    answer = config.state || null;
   } else if (label.includes('city')) {
-    answer = config.currentCity || 'Bangalore';
+    answer = config.currentCity || null;
   } else if (label.includes('sponsorship') || label.includes('visa')) {
-    answer = config.requireVisa || 'No';
+    answer = config.requireVisa || null;
   } else if (label.includes('proficiency') || label.includes('fluency')) {
-    answer = 'Professional';
+    answer = config.proficiencyLevel || null;
   } else if (label.includes('education') || label.includes('degree')) {
-    answer = 'Bachelor';
-  } else if (label.includes('comfortable') || label.includes('willing') || label.includes('able to')) {
-    answer = 'Yes';
+    answer = config.educationLevel || null;
+  } else if (label.includes('relocat')) {
+    answer = config.willingToRelocate || null;
   } else if (label.includes('experience') || label.includes('years')) {
-    answer = '3';
+    answer = config.yearsOfExperience ?? null;
   } else if (label.includes('work auth') || label.includes('legally')) {
-    answer = 'Yes';
+    answer = config.workAuthorization || config.usCitizenship || null;
   }
 
-  selectBestOption(select, answer);
+  if (answer != null && String(answer).trim()) selectBestOption(select, String(answer));
 }
 
 /**
@@ -129,67 +142,101 @@ function handleSelectQuestion(question, select, config) {
  */
 function handleRadioQuestion(question, fieldset, config) {
   const inputs = fieldset.querySelectorAll('input[type="radio"]');
-  const alreadySelected = Array.from(inputs).some(i => i.checked);
-  if (alreadySelected) return;
+  if (Array.from(inputs).some(input => input.checked)) return;
 
   const label = getQuestionLabel(question).toLowerCase();
-  let answer = 'Yes';
-
-  if (label.includes('citizenship') || label.includes('eligibility')) {
-    answer = config.usCitizenship || 'Yes';
+  const resolution = resolveConfiguredAnswer(label, 'radio', config);
+  let answer = null;
+  if (resolution) {
+    if (resolution.status === AnswerResolutionStatus.ANSWERED) {
+      answer = resolution.value;
+    } else if (resolution.status === AnswerResolutionStatus.UNSAFE_TO_ANSWER) {
+      // Legal/consent attestations must be handled by the user; never auto-fill.
+      return;
+    }
+    // NEEDS_USER_INPUT / UNKNOWN: fall through to the generic Yes/No fallback
+    // below so common capability questions do not stall the run.
+  } else if (label.includes('citizenship') || label.includes('eligibility') ||
+      label.includes('work auth') || label.includes('legally')) {
+    answer = config.workAuthorization || config.usCitizenship || null;
   } else if (label.includes('veteran') || label.includes('protected')) {
     answer = config.veteranStatus || 'Decline';
   } else if (label.includes('disability') || label.includes('handicap')) {
     answer = config.disabilityStatus || 'Decline';
   } else if (label.includes('sponsorship') || label.includes('visa')) {
-    answer = config.requireVisa || 'No';
+    answer = config.requireVisa || null;
   } else if (label.includes('gender') || label.includes('sex')) {
     answer = config.gender || 'Decline';
-  } else if (label.includes('comfortable') || label.includes('willing') ||
-             label.includes('able to') || label.includes('open to') ||
-             label.includes('do you have') || label.includes('have you') ||
-             label.includes('can you') || label.includes('are you')) {
-    answer = 'Yes';
   } else if (label.includes('relocat')) {
-    answer = 'Yes';
+    answer = config.willingToRelocate || null;
   }
 
-  // Find matching radio option by text
+  // Generic Yes/No fallback so common capability, education, and experience
+  // questions do not stall the run. Skipped for legal/consent attestations and
+  // when the user has turned off auto-answering.
+  if ((answer == null || !String(answer).trim()) &&
+      canAutoAnswerYesNo(label, inputs, config)) {
+    answer = resolveDefaultYesNoAnswer(label, config);
+  }
+
+  if (answer == null || !String(answer).trim()) return;
+
   for (const input of inputs) {
     const radioLabel = fieldset.querySelector(`label[for="${input.id}"]`);
-    if (radioLabel) {
-      const radioText = radioLabel.textContent.toLowerCase();
-      if (radioText.includes(answer.toLowerCase()) || answer.toLowerCase().includes(radioText)) {
+    if (!radioLabel) continue;
+    const radioText = radioLabel.textContent.toLowerCase().trim();
+    const normalizedAnswer = String(answer).toLowerCase().trim();
+    if (radioText.includes(normalizedAnswer) || normalizedAnswer.includes(radioText)) {
+      input.click();
+      return;
+    }
+  }
+
+  if (String(answer).toLowerCase().includes('decline')) {
+    for (const input of inputs) {
+      const text = fieldset.querySelector(`label[for="${input.id}"]`)?.textContent.toLowerCase() || '';
+      if (text.includes('decline') || text.includes('prefer not')) {
         input.click();
         return;
       }
     }
   }
+}
 
-  // Fallback: try "Yes" option explicitly
-  for (const input of inputs) {
-    const radioLabel = fieldset.querySelector(`label[for="${input.id}"]`);
-    const text = radioLabel ? radioLabel.textContent.toLowerCase().trim() : '';
-    if (text === 'yes' || text === 'true') {
-      input.click();
-      return;
-    }
-  }
+/** Legal/consent attestations must never be auto-answered. */
+const LEGAL_CONSENT_PATTERN =
+  /agree|acknowledge|certify|consent|terms|privacy|authorize|attest|signature|policy/i;
 
-  // Fallback: try "Decline" or "Prefer not" options
-  for (const input of inputs) {
-    const radioLabel = fieldset.querySelector(`label[for="${input.id}"]`);
-    const text = radioLabel ? radioLabel.textContent.toLowerCase() : '';
-    if (text.includes('decline') || text.includes('prefer not') || text.includes("don't wish")) {
-      input.click();
-      return;
-    }
-  }
+/**
+ * Decide whether a two-option Yes/No radio may be auto-answered to keep the
+ * run moving. Excludes legal/consent questions and honors an opt-out flag.
+ * @param {string} label - Lowercased question label
+ * @param {NodeListOf<HTMLInputElement>} inputs
+ * @param {object} config
+ * @returns {boolean}
+ */
+function canAutoAnswerYesNo(label, inputs, config) {
+  if (config && config.autoAnswerYesNo === false) return false;
+  if (LEGAL_CONSENT_PATTERN.test(label)) return false;
+  const optionTexts = [...inputs]
+    .map(input => (input.closest('label')?.textContent ||
+      input.parentElement?.textContent || '').toLowerCase().trim());
+  const looksYesNo = optionTexts.some(text => /\byes\b/.test(text)) &&
+    optionTexts.some(text => /\bno\b/.test(text));
+  return looksYesNo;
+}
 
-  // Last resort: select first option
-  if (inputs.length > 0) {
-    inputs[0].click();
-  }
+/**
+ * Choose a default answer for an unmapped Yes/No question. Defaults to "Yes"
+ * for capability/eligibility-style questions since those are the common
+ * blockers; declines demographic disclosures.
+ * @param {string} label - Lowercased question label
+ * @param {object} config
+ * @returns {string}
+ */
+function resolveDefaultYesNoAnswer(label, config) {
+  if (/gender|\bsex\b|race|ethnicity|disability|veteran/.test(label)) return 'Decline';
+  return (config && config.defaultYesNoAnswer) || 'Yes';
 }
 
 /**
@@ -200,12 +247,17 @@ async function handleTextQuestion(question, input, config) {
   if (currentValue) return;
 
   const label = getQuestionLabel(question).toLowerCase();
+  const resolution = resolveConfiguredAnswer(label, input.type === 'number' ? 'number' : 'text', config);
+  if (resolution) {
+    applyResolvedText(input, resolution);
+    return;
+  }
   let answer = '';
 
   const fullName = [config.firstName, config.middleName, config.lastName].filter(Boolean).join(' ');
 
   if (label.includes('experience') || label.includes('years')) {
-    answer = getSkillExperience(label, config) || config.yearsOfExperience || '3';
+    answer = getSkillExperience(label, config) || config.yearsOfExperience || '';
   } else if (label.includes('phone') || label.includes('mobile')) {
     answer = config.phoneNumber || '';
   } else if (label.includes('street')) {
@@ -231,27 +283,31 @@ async function handleTextQuestion(question, input, config) {
   } else if (label.includes('employer') || label.includes('company name')) {
     answer = config.recentEmployer || '';
   } else if (label.includes('notice')) {
-    if (label.includes('month')) answer = String(Math.floor((config.noticePeriod || 30) / 30));
-    else if (label.includes('week')) answer = String(Math.floor((config.noticePeriod || 30) / 7));
-    else answer = String(config.noticePeriod || 30);
-  } else if (label.includes('salary') || label.includes('compensation') || label.includes('ctc') || label.includes('pay')) {
-    if (label.includes('current') || label.includes('present')) {
-      answer = String(config.currentCtc || 0);
-    } else {
-      answer = String(config.desiredSalary || 0);
+    if (config.noticePeriod != null && config.noticePeriod !== '') {
+      const noticePeriod = Number(config.noticePeriod);
+      if (Number.isFinite(noticePeriod) && noticePeriod >= 0) {
+        if (label.includes('month')) answer = String(Math.floor(noticePeriod / 30));
+        else if (label.includes('week')) answer = String(Math.floor(noticePeriod / 7));
+        else answer = String(noticePeriod);
+      }
     }
+  } else if (label.includes('salary') || label.includes('compensation') || label.includes('ctc') || label.includes('pay')) {
+    const configuredSalary = label.includes('current') || label.includes('present')
+      ? config.currentCtc
+      : config.desiredSalary;
+    answer = configuredSalary != null && configuredSalary !== '' ? String(configuredSalary) : '';
   } else if (label.includes('linkedin')) {
     answer = config.linkedInUrl || '';
   } else if (label.includes('website') || label.includes('portfolio') || label.includes('blog') || label.includes('github')) {
     answer = config.website || '';
   } else if (label.includes('scale') || label.includes('1-10') || label.includes('confidence')) {
-    answer = config.confidenceLevel || '8';
+    answer = config.confidenceLevel || '';
   } else if (label.includes('headline')) {
     answer = config.linkedinHeadline || '';
   } else if (label.includes('gpa') || label.includes('cgpa')) {
-    answer = '7.5';
+    answer = config.gpa || '';
   } else if (label.includes('how did you hear') || label.includes('come across') || label.includes('referral source')) {
-    answer = 'LinkedIn';
+    answer = config.referralSource || '';
   } else {
     answer = await getSmartFallback(label, input.type, config);
   }
@@ -270,14 +326,16 @@ function handleTextareaQuestion(question, textarea, config) {
   if (currentValue) return;
 
   const label = getQuestionLabel(question).toLowerCase();
+  const resolution = resolveConfiguredAnswer(label, 'textarea', config);
+  if (resolution) {
+    applyResolvedText(textarea, resolution);
+    return;
+  }
   let answer = '';
-
   if (label.includes('summary') || label.includes('about')) {
     answer = config.linkedinSummary || '';
   } else if (label.includes('cover')) {
     answer = config.coverLetter || '';
-  } else {
-    answer = config.linkedinSummary || config.coverLetter || '';
   }
 
   if (answer) {
@@ -329,11 +387,7 @@ function selectBestOption(select, answer) {
       return;
     }
   }
-  // Fallback: select first non-placeholder option
-  if (options.length > 1) {
-    select.selectedIndex = 1;
-    select.dispatchEvent(new Event('change', { bubbles: true }));
-  }
+  // No confident option match: leave the field for explicit user input.
 }
 
 /**
@@ -357,30 +411,9 @@ function getSkillExperience(label, config) {
 }
 
 /**
- * Smart fallback for completely unknown questions.
- * If AI is enabled, attempts to get an AI-generated answer first.
+ * Unknown questions remain blank. Backend AI output is a review-only draft and
+ * is never applied directly in the active LinkedIn submission path.
  */
-async function getSmartFallback(label, inputType, config) {
-  // Try AI if available
-  if (config && config.useAI && typeof getAIFormAnswer === 'function') {
-    const jobTitle = config._currentJobTitle || '';
-    const company = config._currentCompany || '';
-    const aiAnswer = await getAIFormAnswer(label, jobTitle, company, config);
-    if (aiAnswer) return aiAnswer;
-  }
-
-  if (label.includes('have you') || label.includes('do you') || label.includes('are you') ||
-      label.includes('can you') || label.includes('will you') || label.includes('willing')) {
-    return 'Yes';
-  }
-  if (label.includes('how many')) {
-    return '3';
-  }
-  if (label.includes('rate') || label.includes('proficien') || label.includes('level')) {
-    return '8';
-  }
-  if (inputType === 'number') {
-    return '3';
-  }
-  return '3';
+async function getSmartFallback() {
+  return null;
 }

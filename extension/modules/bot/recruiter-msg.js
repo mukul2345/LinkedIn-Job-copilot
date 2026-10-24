@@ -7,9 +7,20 @@
  * @param {string} jobTitle - Title of the job applied to
  * @param {string} company - Company name
  * @param {object} config - User configuration
+ * @param {string} [jobId] - Job posting identifier (used for dedupe)
  */
-async function messageRecruiter(jobTitle, company, config) {
+async function messageRecruiter(jobTitle, company, config, jobId = '') {
   try {
+    // Guard: a real user-configured template must exist before we do anything.
+    // No fallback text is ever sent.
+    const templateExists = Boolean(
+      (config.templates && (config.templates.recruiterMessage || config.templates.hrMessage))
+    );
+    if (!templateExists) {
+      log('No recruiter/HR message template configured. Skipping post-apply message.', 'info');
+      return;
+    }
+
     const allButtons = document.querySelectorAll('button, a[role="button"]');
     let messageBtnInHiringSection = null;
     let recruiterName = '';
@@ -72,7 +83,35 @@ async function messageRecruiter(jobTitle, company, config) {
     }
 
     if (!recruiterName) recruiterName = 'Hiring Manager';
-    log(`Found recruiter: ${recruiterName}. Sending message...`, 'info');
+
+    // Try to resolve a stable contact identity for dedupe (profile URL preferred).
+    let contactId = recruiterName;
+    const recruiterProfileLink = messageBtnInHiringSection
+      .closest('div, section, li')
+      ?.querySelector('a[href*="/in/"]');
+    if (recruiterProfileLink) contactId = recruiterProfileLink.href;
+
+    // Dedupe: never message the same recruiter twice for the same job posting.
+    if (await hasAlreadyMessaged(contactId, jobId)) {
+      log(`Already messaged ${recruiterName} for this job. Skipping.`, 'info');
+      return;
+    }
+
+    // Render the template and verify no unresolved {field} placeholders remain
+    // BEFORE consuming quota or opening the chat window.
+    const message = buildRecruiterMessage(recruiterName, jobTitle, company, config);
+    if (!message) {
+      log('No recruiter message template configured. Skipping.', 'info');
+      return;
+    }
+
+    const unresolved = findUnresolvedPlaceholders(message);
+    if (unresolved.length > 0) {
+      log(`Recruiter message has unresolved placeholders (${unresolved.join(', ')}). Skipping to avoid sending a broken message.`, 'warning');
+      return;
+    }
+
+    log(`Found recruiter: ${recruiterName}. Opening message...`, 'info');
 
     // Click the Message button
     messageBtnInHiringSection.click();
@@ -87,13 +126,6 @@ async function messageRecruiter(jobTitle, company, config) {
       return;
     }
 
-    // Type the message
-    const message = buildRecruiterMessage(recruiterName, jobTitle, company, config);
-    if (!message) {
-      log('No recruiter message template configured. Skipping.', 'info');
-      pressEscape();
-      return;
-    }
     msgBox.focus();
     await sleep(200);
     document.execCommand('insertText', false, message);
@@ -107,8 +139,29 @@ async function messageRecruiter(jobTitle, company, config) {
     }
 
     if (sendBtn && !sendBtn.disabled) {
+      // Consume outreach quota at the last safe point: the template is valid,
+      // dedupe passed, the chat opened, and the Send button is available.
+      const quota = await consumeQuota('outreach');
+      if (!quota.allowed) {
+        msgBox.focus();
+        document.execCommand('selectAll', false, null);
+        document.execCommand('delete', false, null);
+
+        if (quota.errorCode) {
+          showNotificationSafe('Unable to verify outreach quota. Message was not sent.');
+        } else {
+          log(`Monthly outreach limit reached (${quota.used}/${quota.limit} on ${quota.plan} plan). Skipping recruiter message.`, 'warning');
+          showNotificationSafe('Monthly outreach limit reached. Upgrade to Pro for more.');
+        }
+        await closeMessageWindow();
+        return;
+      }
+
       sendBtn.click();
       log(`Message sent to ${recruiterName}!`, 'success');
+      // Record for dedupe so this recruiter isn't messaged again for this job.
+      await recordOutreach(contactId, jobId);
+      await incrementHRMessageCount();
     } else {
       log(`Send button not found/disabled for ${recruiterName}.`, 'warning');
     }
@@ -124,31 +177,47 @@ async function messageRecruiter(jobTitle, company, config) {
 }
 
 /**
- * Build a personalized recruiter message from user's template.
- * If no template is configured, returns null (caller should skip messaging).
+ * Build a personalized recruiter message from the user's configured template.
+ * Uses the recruiter-specific template, or the HR template if the user
+ * configured that one instead. Both are user-authored — there is NO hardcoded
+ * generic fallback. Returns null when the user has configured neither, so the
+ * caller skips messaging entirely.
+ *
+ * @returns {string|null} Rendered message, or null if no template is configured
  */
 function buildRecruiterMessage(recruiterName, jobTitle, company, config) {
   const templates = config.templates || {};
-  // Try recruiter-specific template first, fall back to HR template
   const template = templates.recruiterMessage || templates.hrMessage || '';
 
   if (!template) {
-    // No template configured — return null so caller knows to skip
-    log('No recruiter/HR message template configured. Skipping post-apply message.', 'info');
     return null;
   }
 
   const myName = [config.firstName, config.lastName].filter(Boolean).join(' ');
-  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '3';
+  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '';
   const headline = config.linkedinHeadline || config.profile?.linkedinHeadline || '';
 
-  // Replace all supported placeholders
-  return template
-    .replace(/\{recruiterName\}/gi, recruiterName)
-    .replace(/\{name\}/gi, recruiterName)
-    .replace(/\{jobTitle\}/gi, jobTitle || '')
-    .replace(/\{company\}/gi, company || '')
-    .replace(/\{experience\}/gi, experience)
-    .replace(/\{headline\}/gi, headline)
-    .replace(/\{myName\}/gi, myName);
+  return renderTemplate(template, {
+    recruiterName,
+    name: recruiterName,
+    jobTitle: jobTitle || '',
+    company: company || '',
+    experience,
+    headline,
+    myName,
+  });
+}
+
+/**
+ * Show a lightweight user-facing notification from a content-script context.
+ * Falls back to logging if no notification bridge is available.
+ * @param {string} message
+ */
+function showNotificationSafe(message) {
+  try {
+    chrome.runtime.sendMessage({ type: 'notification', message }).catch(() => {});
+  } catch (_) {
+    // Ignore — extension context may be invalidated.
+  }
+  log(message, 'warning');
 }

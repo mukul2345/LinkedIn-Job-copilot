@@ -6,25 +6,19 @@
 /**
  * Get the user's current plan from local cache.
  * In content scripts, ONLY uses local cache (no Firebase access).
- * In popup, can refresh from Firestore if cache is stale.
- * Admin users always get unlimited Pro access.
+ * In popup contexts, the cached value may be refreshed from Firestore.
+ * Cached roles are display metadata only and never grant privileged access.
  * @returns {Promise<{plan: string, expiresAt: Date|null, isActive: boolean, role: string}>}
  */
 async function getUserPlanStatus() {
-  // Check cached role first (works in both popup and content script)
   const cached = await new Promise((resolve) => {
     chrome.storage.local.get(['userPlan', 'planExpiresAt', 'planCachedAt', 'userRole'], resolve);
   });
 
-  // Admin role = unlimited Pro, no expiry
-  if (cached.userRole === USER_ROLES.ADMIN) {
-    return { plan: 'pro', expiresAt: null, isActive: true, role: 'admin' };
-  }
-
   // Use cached plan value if available
   if (cached.userPlan) {
     const expiresAt = cached.planExpiresAt ? new Date(cached.planExpiresAt) : null;
-    const isActive = cached.userPlan === 'free' || (expiresAt && expiresAt > new Date());
+    const isActive = cached.userPlan === 'free' || Boolean(expiresAt && expiresAt > new Date());
     return { plan: cached.userPlan || 'free', expiresAt, isActive, role: cached.userRole || 'user' };
   }
 
@@ -62,13 +56,6 @@ async function refreshPlanFromCloud() {
     const role = data.role || 'user';
     const plan = data.plan || 'free';
     const expiresAt = data.planExpiresAt?.toDate() || null;
-
-    // Admin users always have active Pro
-    if (role === USER_ROLES.ADMIN) {
-      await cacheUserRoleAndPlan(role, 'pro', null);
-      return { plan: 'pro', expiresAt: null, isActive: true, role };
-    }
-
     const isActive = plan === 'free' || (expiresAt && expiresAt > new Date());
 
     // If plan expired, revert to free in Firestore
@@ -116,25 +103,17 @@ async function cachePlanLocally(plan, expiresAt) {
 }
 
 /**
- * Check if user can perform a specific action.
- * Returns { allowed, reason } — if not allowed, reason explains why.
- * Admin users always have unlimited access.
+ * Check whether local UI may begin an action. Final count-based authorization
+ * always occurs through the server immediately before the irreversible action.
+ * Cached roles and daily counters never grant or deny server quota.
  * @param {'applications'|'hrMessages'|'aiAnswers'} action
- * @returns {Promise<{allowed: boolean, reason?: string, current?: number, limit?: number|string}>}
+ * @returns {Promise<{allowed: boolean, reason?: string, current?: number|null, limit?: number}>}
  */
 async function canPerformAction(action) {
-  // Check cached role — admin bypasses all limits
-  const cached = await new Promise(resolve => {
-    chrome.storage.local.get('userRole', resolve);
-  });
-  if (cached.userRole === USER_ROLES.ADMIN) {
-    return { allowed: true, current: 0, limit: '∞' };
-  }
+  const { plan, isActive } = await getUserPlanStatus();
+  const effectivePlan = plan === 'pro' && isActive ? 'pro' : 'free';
+  const limits = getPlanLimits(effectivePlan);
 
-  const { plan } = await getUserPlanStatus();
-  const limits = getPlanLimits(plan);
-
-  // AI answers check (boolean, not count-based)
   if (action === 'aiAnswers') {
     return {
       allowed: limits.aiAnswers,
@@ -142,26 +121,23 @@ async function canPerformAction(action) {
     };
   }
 
-  // Count-based checks
-  const result = await checkUsageLimit(action, limits);
-  if (!result.allowed) {
-    return {
-      allowed: false,
-      reason: `Daily ${action === 'applications' ? 'application' : 'HR message'} limit reached (${result.limit}/day). Upgrade to Pro for unlimited.`,
-      current: result.current,
-      limit: result.limit,
-    };
-  }
-
-  return { allowed: true, current: result.current, limit: result.limit };
+  const limit = action === 'applications'
+    ? limits.applicationsPerMonth
+    : limits.hrMessagesPerMonth;
+  return {
+    allowed: true,
+    current: null,
+    limit,
+    reason: 'Monthly quota is verified by the server immediately before the action.',
+  };
 }
 
 /**
- * Check if user is on Pro plan (or is admin).
+ * Check if the cached plan is an active Pro subscription.
+ * Cached role values never upgrade the plan.
  * @returns {Promise<boolean>}
  */
 async function isProUser() {
-  const { plan, isActive, role } = await getUserPlanStatus();
-  if (role === USER_ROLES.ADMIN) return true;
+  const { plan, isActive } = await getUserPlanStatus();
   return plan === 'pro' && isActive;
 }

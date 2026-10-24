@@ -7,7 +7,7 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f1117; color: #f1f5f9; line-height: 1.8; }
-    .container { max-width: 700px; margin: 0 auto; padding: 60px 20px; }
+    .container { max-width: 760px; margin: 0 auto; padding: 60px 20px; }
     h1 { font-size: 2rem; margin-bottom: 8px; }
     .updated { color: #64748b; margin-bottom: 40px; font-size: 0.9rem; }
     h2 { font-size: 1.2rem; margin: 30px 0 12px; color: #6366f1; }
@@ -20,58 +20,70 @@
 <body>
   <div class="container">
     <h1>Privacy Policy</h1>
-    <p class="updated">Last updated: May 24, 2026</p>
+    <p class="updated">Last updated: August 30, 2026</p>
 
-    <h2>What We Collect</h2>
-    <p>JobPilot AI collects the following data to provide its services:</p>
+    <h2>Data We Process</h2>
+    <p>JobPilot AI processes data you provide or request so it can deliver job-search assistance:</p>
     <ul>
-      <li><strong>Account information:</strong> Email address and display name (for authentication via Firebase).</li>
-      <li><strong>Application preferences:</strong> Job search terms, profile details, and Q&A answers you configure in the extension.</li>
-      <li><strong>Usage statistics:</strong> Number of applications sent, messages sent, and session counts (for plan limit enforcement).</li>
+      <li><strong>Account data:</strong> Email address, display name, account identifier, subscription plan, and monthly usage counters.</li>
+      <li><strong>Candidate data:</strong> Profile fields, job preferences, configured answers, skills, and resumes you upload.</li>
+      <li><strong>Job data:</strong> Search queries, job listings, fit results, application state, and records needed to avoid duplicate work.</li>
+      <li><strong>Optional Gmail data:</strong> If Gmail support is explicitly configured and connected, read-only message metadata and content needed to propose application-status updates.</li>
+      <li><strong>Operational data:</strong> Request identifiers, structured error information, and limited diagnostics. Logs are designed to redact credentials and personal content.</li>
     </ul>
 
-    <h2>What We Do NOT Collect</h2>
+    <h2>How Data Is Used</h2>
     <ul>
-      <li>We do NOT store your LinkedIn password on any server. It is stored locally in your browser only.</li>
-      <li>We do NOT read or store your LinkedIn messages, connections, or profile data.</li>
-      <li>We do NOT sell or share your data with third parties.</li>
-      <li>We do NOT track your browsing activity outside of LinkedIn.</li>
+      <li>Search supported job boards and normalize, deduplicate, filter, and rank results.</li>
+      <li>Extract text from PDF or DOCX resumes and provide user-reviewed resume or form assistance.</li>
+      <li>Prepare application fields while leaving unknown facts, legal attestations, and consent choices for you.</li>
+      <li>Enforce monthly plan quotas immediately before supported final actions.</li>
+      <li>Maintain application and tracker state. Opening an external application page is not recorded as submission.</li>
     </ul>
 
-    <h2>Data Storage</h2>
-    <p>Your settings are stored in two places:</p>
+    <h2>Storage and Service Providers</h2>
+    <p>Settings may be stored in Chrome extension storage. Account, resume, job, tracker, and quota records may be stored in Firebase and Google Cloud services. Resume files are limited to supported document types and protected by account-scoped access rules.</p>
+    <p>Depending on administrator configuration and the feature you use, data may be processed by:</p>
     <ul>
-      <li><strong>Locally:</strong> In Chrome's extension storage on your device (chrome.storage.local).</li>
-      <li><strong>Cloud:</strong> In Firebase Firestore (Google Cloud) for sync across devices. Data is encrypted in transit and at rest.</li>
+      <li>Google Firebase and Google Cloud for authentication, storage, databases, and backend execution.</li>
+      <li>Configured AI providers for resume extraction assistance, job matching, or draft generation. Provider credentials remain on the backend.</li>
+      <li>Supported job boards and the configured scraper service for searches you initiate.</li>
+      <li>Cashfree or Razorpay for payment processing. JobPilot AI does not store full card, bank, or UPI credentials.</li>
+      <li>Google Gmail APIs only when optional Gmail access is configured and you connect it.</li>
+    </ul>
+    <p>We do not sell personal data. Service providers receive only the data needed to provide the requested feature under their own terms and privacy policies.</p>
+
+    <h2>LinkedIn and External Applications</h2>
+    <p>JobPilot AI does not collect or store LinkedIn passwords and does not perform automatic LinkedIn login. You sign in to LinkedIn yourself. Legacy extension credential fields are removed during migration.</p>
+    <p>LinkedIn Easy Apply keeps a final user-review boundary unless you explicitly choose otherwise in supported settings. If a final click cannot be confirmed, the attempt stops as unconfirmed and is not retried automatically. Indeed and Glassdoor applications open for human review; they are recorded as submitted only after your separate confirmation.</p>
+
+    <h2>AI and Candidate Accuracy</h2>
+    <p>AI output is treated as assistance, not verified fact. Hard exclusions and configured candidate facts are not overridden by AI. Unknown factual questions and low-confidence suggestions remain for review. Do not submit generated content without checking it.</p>
+
+    <h2>Retention and Deletion</h2>
+    <p>Local caches are retained only as needed for extension operation. Cloud records and uploaded files remain until deleted under the application's retention process or account-deletion workflow. Some short-lived operational logs may be retained for reliability and security.</p>
+    <ul>
+      <li>Use the extension's data-clearing controls to remove local settings and caches.</li>
+      <li>Remove connected Google access through the extension and your Google Account permissions.</li>
+      <li>Email <a href="mailto:mukul798348@gmail.com">mukul798348@gmail.com</a> to request deletion of account-associated cloud data.</li>
     </ul>
 
-    <h2>LinkedIn Credentials</h2>
-    <p>If you choose to save your LinkedIn email and password for auto-login, they are stored <strong>only in your browser's local storage</strong>. They are never uploaded to any server.</p>
-
-    <h2>Payment Information</h2>
-    <p>Payments are processed by Cashfree Payments. We do not store your card details, UPI ID, or bank information. Cashfree handles all payment data securely under PCI-DSS compliance.</p>
-
-    <h2>Data Deletion</h2>
-    <p>You can delete all your data at any time:</p>
+    <h2>Permissions</h2>
     <ul>
-      <li>Use the "Clear All Data" button in the extension's Settings tab.</li>
-      <li>Or email us at <a href="mailto:mukul798348@gmail.com">mukul798348@gmail.com</a> to request account deletion.</li>
+      <li><strong>storage:</strong> Save local preferences, caches, and application state.</li>
+      <li><strong>tabs:</strong> Open selected application pages and coordinate supported user-requested flows.</li>
+      <li><strong>notifications and alarms:</strong> Show status notifications and run configured schedules.</li>
+      <li><strong>Site access:</strong> Operate only on hosts listed in the installed manifest. A build may omit optional permissions when the corresponding feature is not configured.</li>
+      <li><strong>identity:</strong> Included only in builds configured for optional Google/Gmail authorization.</li>
     </ul>
 
-    <h2>Permissions Used</h2>
-    <ul>
-      <li><strong>storage:</strong> To save your preferences locally.</li>
-      <li><strong>activeTab / tabs:</strong> To interact with LinkedIn pages for auto-applying.</li>
-      <li><strong>notifications:</strong> To alert you about bot status.</li>
-      <li><strong>identity:</strong> For Google sign-in authentication.</li>
-    </ul>
+    <h2>Your Choices and Security</h2>
+    <p>You can stop automation, decline optional integrations, leave fields unanswered, and review application content before submission. Keep your browser profile and account secure. No system can guarantee absolute security; report suspected issues through the project contact.</p>
 
     <h2>Contact</h2>
-    <p>For questions about this privacy policy, contact: <a href="mailto:mukul798348@gmail.com">mukul798348@gmail.com</a></p>
+    <p>For privacy questions or deletion requests, contact <a href="mailto:mukul798348@gmail.com">mukul798348@gmail.com</a>.</p>
 
-    <footer>
-      <p><a href="index.html">← Back to JobPilot AI</a></p>
-    </footer>
+    <footer><p><a href="index.html">← Back to JobPilot AI</a></p></footer>
   </div>
 </body>
 </html>

@@ -1,10 +1,48 @@
 // payment-service.js - Payment integration for JobPilot AI Pro
 // Supports both Cashfree and Razorpay providers.
 
-/**
- * Cloud Functions base URL
- */
-var CLOUD_FUNCTIONS_URL = 'https://us-central1-linkedin-jobcopilot.cloudfunctions.net';
+// RuntimeConfig is loaded before this service in every supported extension context.
+
+/** Resolve the backend base URL from centralized runtime configuration when present. */
+function getPaymentApiBaseUrl() {
+  var configuredUrl = '';
+  if (typeof RuntimeConfig !== 'undefined' && RuntimeConfig) {
+    if (typeof RuntimeConfig.getCloudFunctionsUrl === 'function') {
+      configuredUrl = RuntimeConfig.getCloudFunctionsUrl();
+    } else if (typeof RuntimeConfig.getFunctionsBaseUrl === 'function') {
+      configuredUrl = RuntimeConfig.getFunctionsBaseUrl();
+    } else if (typeof RuntimeConfig.getApiBaseUrl === 'function') {
+      configuredUrl = RuntimeConfig.getApiBaseUrl();
+    } else if (typeof RuntimeConfig.get === 'function') {
+      configuredUrl = RuntimeConfig.get('cloudFunctionsUrl') || RuntimeConfig.get('apiBaseUrl');
+    } else {
+      configuredUrl = RuntimeConfig.cloudFunctionsUrl || RuntimeConfig.functionsBaseUrl ||
+        RuntimeConfig.apiBaseUrl || RuntimeConfig.backendUrl ||
+        RuntimeConfig.CLOUD_FUNCTIONS_URL || RuntimeConfig.API_BASE_URL || '';
+    }
+  }
+  if (!configuredUrl) throw new Error('Runtime API configuration is unavailable.');
+  return String(configuredUrl).replace(/\/+$/, '');
+}
+
+/** Return a validated checkout URL whose HTTPS origin is explicitly allowed. */
+function getAllowedCheckoutUrl(rawUrl) {
+  try {
+    var checkoutUrl = new URL(rawUrl);
+    if (checkoutUrl.protocol !== 'https:' || checkoutUrl.username || checkoutUrl.password) return '';
+
+    var backendOrigin = new URL(getPaymentApiBaseUrl()).origin;
+    var allowedOrigins = [
+      backendOrigin,
+      'https://payments.cashfree.com',
+      'https://payments-test.cashfree.com',
+      'https://sandbox.cashfree.com',
+    ];
+    return allowedOrigins.indexOf(checkoutUrl.origin) !== -1 ? checkoutUrl.href : '';
+  } catch (error) {
+    return '';
+  }
+}
 
 /**
  * Initiate payment checkout for a subscription.
@@ -19,7 +57,7 @@ async function initiatePayment(user, pricing, provider) {
   try {
     const idToken = await user.getIdToken(true);
 
-    const response = await fetch(`${CLOUD_FUNCTIONS_URL}/createPaymentSession`, {
+    const response = await fetch(`${getPaymentApiBaseUrl()}/createPaymentSession`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -34,25 +72,25 @@ async function initiatePayment(user, pricing, provider) {
       return { success: false, error: result.error || 'Failed to create payment session.' };
     }
 
-    // Store order ID for verification after payment
+    var checkoutProvider = result.provider || provider || 'cashfree';
+    var checkoutResult = checkoutProvider === 'razorpay'
+      ? openRazorpayCheckout(result)
+      : openCashfreeCheckout(result);
+    if (!checkoutResult.success) return checkoutResult;
+
     await new Promise(resolve => {
       chrome.storage.local.set({
         pendingPayment: {
           orderId: result.orderId,
           planId: pricing.id,
           amount: pricing.price,
-          provider: provider || 'cashfree',
+          provider: checkoutProvider,
           createdAt: new Date().toISOString(),
         }
       }, resolve);
     });
 
-    // Route based on provider
-    if (result.provider === 'razorpay') {
-      return openRazorpayCheckout(result);
-    } else {
-      return openCashfreeCheckout(result);
-    }
+    return checkoutResult;
   } catch (error) {
     console.error('[JobPilot] Payment error:', error);
     return { success: false, error: error.message || 'Payment failed. Please try again.' };
@@ -63,16 +101,30 @@ async function initiatePayment(user, pricing, provider) {
  * Open Cashfree hosted checkout page.
  */
 function openCashfreeCheckout(result) {
-  const { paymentSessionId, orderId, environment } = result;
-
-  if (result.paymentLink) {
-    chrome.tabs.create({ url: result.paymentLink });
-  } else if (paymentSessionId) {
-    // Use our hosted checkout page (Cloud Function serves it)
-    const checkoutUrl = `${CLOUD_FUNCTIONS_URL}/handlePaymentWebhook?action=checkout&session=${paymentSessionId}&env=${environment || 'production'}`;
-    chrome.tabs.create({ url: checkoutUrl });
+  var checkoutData = result || {};
+  const { paymentSessionId, orderId, environment } = checkoutData;
+  if (!orderId) {
+    return { success: false, error: 'Payment checkout is missing the order ID.' };
   }
 
+  var rawCheckoutUrl = checkoutData.paymentLink;
+  if (!rawCheckoutUrl && paymentSessionId) {
+    var hostedCheckoutUrl = new URL('/handlePaymentWebhook', getPaymentApiBaseUrl());
+    hostedCheckoutUrl.searchParams.set('action', 'checkout');
+    hostedCheckoutUrl.searchParams.set('session', paymentSessionId);
+    hostedCheckoutUrl.searchParams.set('env', environment || 'production');
+    rawCheckoutUrl = hostedCheckoutUrl.href;
+  }
+  if (!rawCheckoutUrl) {
+    return { success: false, error: 'Payment checkout is missing a redirect URL or session ID.' };
+  }
+
+  var checkoutUrl = getAllowedCheckoutUrl(rawCheckoutUrl);
+  if (!checkoutUrl) {
+    return { success: false, error: 'Payment checkout URL is not an allowed HTTPS origin.' };
+  }
+
+  chrome.tabs.create({ url: checkoutUrl });
   return { success: true, orderId };
 }
 
@@ -82,14 +134,27 @@ function openCashfreeCheckout(result) {
  * The standard flow redirects to Razorpay's page for payment.
  */
 function openRazorpayCheckout(result) {
-  const { razorpayOrderId, razorpayKeyId, orderId, amount, currency, name, description, prefill } = result;
+  const { razorpayOrderId, razorpayKeyId, orderId, amount, name, description, prefill } = result || {};
+  if (!orderId || !razorpayOrderId || !razorpayKeyId ||
+      !Number.isFinite(Number(amount)) || Number(amount) <= 0) {
+    return { success: false, error: 'Razorpay checkout is missing required order or session values.' };
+  }
 
-  // Build Razorpay hosted checkout URL
-  // Razorpay standard checkout: create a simple HTML page that loads their SDK
-  // We'll use a Cloud Function to serve this (like Cashfree's checkout page)
-  const checkoutUrl = `${CLOUD_FUNCTIONS_URL}/handleRazorpayWebhook?action=checkout&orderId=${razorpayOrderId}&keyId=${razorpayKeyId}&amount=${amount}&name=${encodeURIComponent(name || '')}&description=${encodeURIComponent(description || '')}&email=${encodeURIComponent(prefill?.email || '')}`;
+  var hostedCheckoutUrl = new URL('/handleRazorpayWebhook', getPaymentApiBaseUrl());
+  hostedCheckoutUrl.searchParams.set('action', 'checkout');
+  hostedCheckoutUrl.searchParams.set('orderId', razorpayOrderId);
+  hostedCheckoutUrl.searchParams.set('keyId', razorpayKeyId);
+  hostedCheckoutUrl.searchParams.set('amount', String(amount));
+  hostedCheckoutUrl.searchParams.set('name', name || '');
+  hostedCheckoutUrl.searchParams.set('description', description || '');
+  hostedCheckoutUrl.searchParams.set('email', (prefill && prefill.email) || '');
+
+  var checkoutUrl = getAllowedCheckoutUrl(hostedCheckoutUrl.href);
+  if (!checkoutUrl) {
+    return { success: false, error: 'Payment checkout URL is not an allowed HTTPS origin.' };
+  }
+
   chrome.tabs.create({ url: checkoutUrl });
-
   return { success: true, orderId };
 }
 
@@ -113,7 +178,7 @@ async function verifyPendingPayment() {
 
     const idToken = await user.getIdToken(true);
 
-    const response = await fetch(`${CLOUD_FUNCTIONS_URL}/verifyPayment`, {
+    const response = await fetch(`${getPaymentApiBaseUrl()}/verifyPayment`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -128,9 +193,11 @@ async function verifyPendingPayment() {
       await new Promise(resolve => {
         chrome.storage.local.remove('pendingPayment', resolve);
       });
-      // Refresh plan cache
-      await invalidateCache('plan');
-      await invalidateCache('fullProfile');
+      // Refresh plan cache when the cache module is present in this execution context.
+      if (typeof invalidateCache === 'function') {
+        await invalidateCache('plan');
+        await invalidateCache('fullProfile');
+      }
       if (typeof refreshPlanFromCloud === 'function') {
         await refreshPlanFromCloud();
       }

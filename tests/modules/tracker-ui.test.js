@@ -131,55 +131,60 @@ describe('renderTrackerEntry()', () => {
       dismissed: false,
     };
 
-    const html = renderTrackerEntry(entry);
-    expect(html).toContain('data-entry-id="entry-1"');
-    expect(html).toContain('Jun 5, 2024');
-    expect(html).toContain('Interview Invitation');
-    expect(html).toContain('#10b981'); // interview color
-    expect(html).toContain('📞'); // interview icon
-    expect(html).toContain('tracker-btn-correct');
-    expect(html).toContain('tracker-btn-dismiss');
+    const element = renderTrackerEntry(entry);
+    expect(element.dataset.entryId).toBe('entry-1');
+    expect(element.textContent).toContain('Jun 5, 2024');
+    expect(element.textContent).toContain('Interview Invitation');
+    expect(element.querySelector('.tracker-badge').style.backgroundColor).toBe('rgb(16, 185, 129)');
+    expect(element.querySelector('.tracker-btn-correct')).not.toBeNull();
+    expect(element.querySelector('.tracker-btn-dismiss')).not.toBeNull();
   });
 
-  it('should escape HTML in subject to prevent XSS', () => {
+  it('should render malicious subject text without creating executable elements', () => {
     const entry = {
       id: 'entry-2',
       company: 'Test',
       status: 'unknown',
-      emailSubject: '<script>alert("xss")</script>',
+      emailSubject: '<img src=x onerror=alert("xss")><script>alert("xss")</script>',
       emailDate: '2024-06-05T10:00:00Z',
       dismissed: false,
     };
 
-    const html = renderTrackerEntry(entry);
-    expect(html).not.toContain('<script>');
-    expect(html).toContain('&lt;script&gt;');
+    const element = renderTrackerEntry(entry);
+    expect(element.querySelector('script')).toBeNull();
+    expect(element.querySelector('img')).toBeNull();
+    expect(element.querySelector('.tracker-subject').textContent).toBe(entry.emailSubject);
+  });
+
+  it('should reject an invalid entry ID', () => {
+    expect(renderTrackerEntry({
+      id: '\"><img src=x onerror=alert(1)>',
+      company: 'Test',
+      status: 'unknown',
+    })).toBeNull();
   });
 
   it('should show "(No subject)" when emailSubject is empty', () => {
-    const entry = {
+    const element = renderTrackerEntry({
       id: 'entry-3',
       company: 'Test',
       status: 'rejection',
       emailSubject: '',
       emailDate: '2024-06-05T10:00:00Z',
       dismissed: false,
-    };
+    });
 
-    const html = renderTrackerEntry(entry);
-    expect(html).toContain('(No subject)');
+    expect(element.textContent).toContain('(No subject)');
   });
 });
 
 describe('renderTrackerDashboard()', () => {
   it('should show empty state for no entries', () => {
-    const html = renderTrackerDashboard([]);
-    expect(html).toContain('No tracked applications yet');
+    expect(renderTrackerDashboard([]).textContent).toContain('No tracked applications yet');
   });
 
   it('should show empty state for null entries', () => {
-    const html = renderTrackerDashboard(null);
-    expect(html).toContain('No tracked applications yet');
+    expect(renderTrackerDashboard(null).textContent).toContain('No tracked applications yet');
   });
 
   it('should render entries grouped by company', () => {
@@ -189,11 +194,11 @@ describe('renderTrackerDashboard()', () => {
       { id: '3', company: 'Google', status: 'offer', emailSubject: 'Congratulations!', emailDate: '2024-06-06T10:00:00Z', dismissed: false },
     ];
 
-    const html = renderTrackerDashboard(entries);
-    expect(html).toContain('Google');
-    expect(html).toContain('Meta');
-    expect(html).toContain('tracker-dashboard');
-    expect(html).toContain('tracker-company-group');
+    const dashboard = renderTrackerDashboard(entries);
+    expect(dashboard.textContent).toContain('Google');
+    expect(dashboard.textContent).toContain('Meta');
+    expect(dashboard.classList.contains('tracker-dashboard')).toBe(true);
+    expect(dashboard.querySelectorAll('.tracker-company-group')).toHaveLength(2);
   });
 
   it('should show all dismissed message when all entries are dismissed', () => {
@@ -201,17 +206,16 @@ describe('renderTrackerDashboard()', () => {
       { id: '1', company: 'Google', status: 'interview', emailSubject: 'Test', emailDate: '2024-06-05T10:00:00Z', dismissed: true },
     ];
 
-    const html = renderTrackerDashboard(entries);
-    expect(html).toContain('All entries have been dismissed');
+    expect(renderTrackerDashboard(entries).textContent).toContain('All entries have been dismissed');
   });
 
-  it('should escape HTML in company names', () => {
+  it('should render malicious company text without creating elements', () => {
     const entries = [
       { id: '1', company: '<b>Evil Corp</b>', status: 'offer', emailSubject: 'Offer', emailDate: '2024-06-05T10:00:00Z', dismissed: false },
     ];
 
-    const html = renderTrackerDashboard(entries);
-    expect(html).not.toContain('<b>Evil Corp</b>');
-    expect(html).toContain('&lt;b&gt;Evil Corp&lt;/b&gt;');
+    const dashboard = renderTrackerDashboard(entries);
+    expect(dashboard.querySelector('b')).toBeNull();
+    expect(dashboard.querySelector('.tracker-company-name').textContent).toBe('<b>Evil Corp</b>');
   });
 });

@@ -1,16 +1,16 @@
-# ⚡ JobPilot AI — LinkedIn Auto Job Applier
+# ⚡ JobPilot AI — Human-Reviewed Job Copilot
 
-A Chrome extension that automates LinkedIn job applications, messages recruiters, and helps you land interviews faster.
+A Chrome extension for supported job discovery, deterministic filtering, AI-assisted matching, and user-controlled application workflows.
 
 ## What It Does
 
-- **Auto-applies** to LinkedIn Easy Apply jobs based on your search criteria
-- **Fills forms** automatically using your saved profile, Q&A answers, and smart defaults
-- **Messages recruiters** after applying (personalized DMs to hiring managers)
-- **HR outreach** — bulk-messages HR/recruiters from your 1st connections
-- **AI answers** (optional) — uses OpenAI/Gemini/DeepSeek to answer unknown questions
-- **Safety system** — adaptive delays and daily limits to protect your LinkedIn account
-- **Subscription system** — free tier (3 apps/day) and Pro tier (unlimited) with Cashfree payments
+- **Searches** LinkedIn, Indeed, and Glassdoor through a configured backend
+- **Prepares LinkedIn Easy Apply forms** from explicitly saved candidate facts and always pauses for final review
+- **Opens Indeed and Glassdoor applications externally** without claiming that opening is submission
+- **Requires user input** for unknown facts, legal consent, CAPTCHA, MFA, and login challenges
+- **Provides optional AI assistance** from backend-only providers; low-confidence answers are never auto-applied
+- **Tracks confirmed outcomes** separately from discovered, opened, and uncertain applications
+- **Enforces server-authoritative monthly quota** — Free 10 and Pro 50 direct LinkedIn submissions
 
 ## Tech Stack
 
@@ -110,18 +110,15 @@ A Chrome extension that automates LinkedIn job applications, messages recruiters
 Same limits apply to HR messages (0–20 safe, 50 danger).
 
 ### Subscription & Payments
-- **Free:** 3 applications/day, 3 HR messages/day, 3 search terms
-- **Pro:** Unlimited everything + AI answers
-- Pricing: ₹299/month, ₹699/3mo, ₹1499/6mo, ₹2999/year
-- Payment via Cashfree (0% fee on UPI)
-- Auto-activates Pro via webhook after payment
-- Auto-reverts to Free when plan expires
-- Expiry alerts at 7, 3, and 1 day before
+- **Free:** 10 confirmed direct LinkedIn submissions per month
+- **Pro:** 50 confirmed direct LinkedIn submissions per month
+- Discovery, scoring, external opening, and form review consume no application quota
+- Payment via configured Cashfree or Razorpay integration
+- Plan changes are verified server-side
 
-### User Roles (DB-driven)
-- **Admin** — Unlimited access, no expiry, "Admin" badge
-- **User** — Subject to plan limits (free or pro)
-- Roles stored in Firestore, not hardcoded
+### User Roles
+- **Admin:** Bypass is accepted only from verified Firebase custom claims
+- **User:** Subject to the server-authoritative Free or Pro monthly limit
 - Each user gets a typed ID: `USR@00001`
 
 ## Setup (Development)

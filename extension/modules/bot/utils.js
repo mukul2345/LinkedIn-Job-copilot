@@ -175,20 +175,19 @@ function findButtonByText(container, text) {
  * Log a message to console and send to popup via chrome.runtime.
  */
 function log(message, level = 'info') {
-  console.log(`[LinkedIn Auto Applier] ${message}`);
-  chrome.runtime.sendMessage({ type: 'log', message, level }).catch(() => {});
+  ExtensionLogger.info('Bot event.', { level });
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.LOG, { message, level })).catch(() => {});
 }
 
 /**
  * Send bot status counts to popup.
  */
 function sendStatus(applied, skipped, failed) {
-  chrome.runtime.sendMessage({
-    type: 'status',
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.STATUS, {
     applied,
     skipped,
-    failed
-  }).catch(() => {});
+    failed,
+  })).catch(() => {});
 }
 
 /**
@@ -264,4 +263,76 @@ function showStatusBadge() {
 function removeStatusBadge() {
   const existing = document.getElementById('lja-status-badge');
   if (existing) existing.remove();
+}
+
+/**
+ * Render a message template by substituting {placeholder} tokens with values.
+ * Placeholder matching is case-insensitive and only replaces keys that are
+ * present in `values`. Any token whose key is missing (or whose value is empty)
+ * is intentionally left in place so the caller can detect it as unresolved.
+ *
+ * @param {string} template - Raw template text containing {field} tokens
+ * @param {Object<string,string>} values - Map of placeholder name → value
+ * @returns {string} Rendered message (may still contain unresolved tokens)
+ */
+function renderTemplate(template, values) {
+  if (!template) return '';
+  let rendered = template;
+  for (const [key, value] of Object.entries(values)) {
+    if (value === undefined || value === null || value === '') continue;
+    const token = new RegExp(`\\{${key}\\}`, 'gi');
+    rendered = rendered.replace(token, String(value));
+  }
+  return rendered;
+}
+
+/**
+ * Find any unresolved {placeholder} tokens remaining in a rendered message.
+ * @param {string} message - Rendered message text
+ * @returns {string[]} List of unresolved placeholder names (without braces)
+ */
+function findUnresolvedPlaceholders(message) {
+  if (!message) return [];
+  const matches = message.match(/\{[a-zA-Z0-9_]+\}/g) || [];
+  return matches.map(token => token.slice(1, -1));
+}
+
+/**
+ * Build a stable dedupe key for a recruiter/HR contact on a specific job posting.
+ * Ensures the same person is never messaged twice for the same job.
+ * @param {string} contactId - Recruiter profile URL or name
+ * @param {string} jobId - Job posting identifier (empty for network-wide outreach)
+ * @returns {string}
+ */
+function buildOutreachDedupeKey(contactId, jobId) {
+  return `${(contactId || '').trim().toLowerCase()}::${(jobId || '').trim().toLowerCase()}`;
+}
+
+/**
+ * Check whether a recruiter has already been messaged for a given job posting.
+ * Reads the persisted `outreachLog` from chrome.storage.local.
+ * @param {string} contactId - Recruiter profile URL or name
+ * @param {string} jobId - Job posting identifier
+ * @returns {Promise<boolean>}
+ */
+async function hasAlreadyMessaged(contactId, jobId) {
+  const key = buildOutreachDedupeKey(contactId, jobId);
+  const data = await getStorage(['outreachLog']);
+  const log = data.outreachLog || {};
+  return Boolean(log[key]);
+}
+
+/**
+ * Record that a recruiter was messaged for a given job posting, so future runs
+ * skip them. Persists to chrome.storage.local under `outreachLog`.
+ * @param {string} contactId - Recruiter profile URL or name
+ * @param {string} jobId - Job posting identifier
+ * @returns {Promise<void>}
+ */
+async function recordOutreach(contactId, jobId) {
+  const key = buildOutreachDedupeKey(contactId, jobId);
+  const data = await getStorage(['outreachLog']);
+  const log = data.outreachLog || {};
+  log[key] = new Date().toISOString();
+  await new Promise(resolve => chrome.storage.local.set({ outreachLog: log }, resolve));
 }

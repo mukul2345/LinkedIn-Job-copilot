@@ -1,9 +1,9 @@
 // tests/modules/hr-outreach.test.js - Unit tests for hr-outreach.js (the fixed HR DM feature)
 
-const { loadModules } = require('../helpers/load-modules');
+const { loadModules, loadModuleByPath } = require('../helpers/load-modules');
 
 beforeAll(() => {
-  loadModules(['plan-config.js', 'usage-repository.js', 'plan-service.js', 'utils.js', 'selectors.js', 'upgrade-modal.js', 'hr-outreach.js']);
+  loadModules(['plan-config.js', 'usage-repository.js', 'plan-service.js', 'utils.js', 'selectors.js', 'upgrade-modal.js', 'safety.js', 'hr-outreach.js']);
 });
 
 beforeEach(() => {
@@ -99,7 +99,7 @@ describe('hasRecentConversation()', () => {
     expect(result).toBe(true);
   });
 
-  it('should return false if datetime is older than 2 months', async () => {
+  it('should return true if any older conversation exists', async () => {
     const oldDate = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days ago
     document.body.innerHTML = `
       <li class="msg-s-message-list__event">
@@ -108,7 +108,7 @@ describe('hasRecentConversation()', () => {
       </li>
     `;
     const result = await hasRecentConversation();
-    expect(result).toBe(false);
+    expect(result).toBe(true);
   });
 
   it('should detect "today" in timestamp text', async () => {
@@ -680,7 +680,7 @@ describe('startHROutreach() search URL', () => {
 
 // ===== Delay configuration =====
 describe('HR outreach delay configuration', () => {
-  it('should have minimum delay of 15 seconds in source', () => {
+  it('should use the centralized LinkedIn message-delay minimum', () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(
@@ -688,13 +688,11 @@ describe('HR outreach delay configuration', () => {
       'utf8'
     );
 
-    // Verify the delay logic: Math.max((config.hrDelayBetween || 30), 15) * 1000
-    expect(source).toContain('Math.max');
-    expect(source).toContain('15)');
-    expect(source).toContain('* 1000');
+    expect(source).toContain('LINKEDIN_SAFETY_LIMITS.minDelay.betweenMessages');
+    expect(source).toContain('Math.max(configuredMessageDelay, minimumMessageDelay)');
   });
 
-  it('should default to 30 seconds if not configured', () => {
+  it('should let the centralized minimum supply the fallback delay', () => {
     const fs = require('fs');
     const path = require('path');
     const source = fs.readFileSync(
@@ -702,7 +700,8 @@ describe('HR outreach delay configuration', () => {
       'utf8'
     );
 
-    expect(source).toContain('hrDelayBetween || 30');
+    expect(source).toContain('config.hrDelayBetween || 0');
+    expect(source).not.toContain('hrDelayBetween || 30');
   });
 });
 

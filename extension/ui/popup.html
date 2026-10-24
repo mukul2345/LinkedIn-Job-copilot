@@ -10,12 +10,13 @@
   <script src="../assets/lib/firebase-auth-compat.js"></script>
   <script src="../assets/lib/firebase-firestore-compat.js"></script>
   <script src="../assets/lib/firebase-functions-compat.js"></script>
+  <script src="../core/firebase-config.js"></script>
 </head>
 <body>
   <div class="container">
     <header>
       <h1>⚡ JobPilot AI</h1>
-      <p class="subtitle">Auto-apply to jobs. Message recruiters. Land interviews.</p>
+      <p class="subtitle">Search, evaluate, and review applications with explicit control.</p>
     </header>
 
     <!-- Auth Screen: Login -->
@@ -60,7 +61,7 @@
     <section id="authSignup" class="tab-content">
       <div class="onboarding-card">
         <h2>Create your account</h2>
-        <p class="hint">Start auto-applying to jobs in minutes.</p>
+        <p class="hint">Create a profile for supported job discovery and human-reviewed applications.</p>
 
         <div class="form-group">
           <label for="signupName">Full Name</label>
@@ -106,28 +107,12 @@
       </div>
     </section>
 
-    <!-- LinkedIn Credentials (shown after auth, before main app) -->
+    <!-- Manual LinkedIn login guidance (shown after auth, before main app) -->
     <section id="onboarding" class="tab-content">
       <div class="onboarding-card">
         <h2>👋 Welcome to JobPilot AI</h2>
-        <p class="hint">Enter your LinkedIn credentials to enable auto-login. They're stored locally in your browser — never sent to any server.</p>
-        
-        <div class="form-group">
-          <label for="linkedinEmail">LinkedIn Email *</label>
-          <input type="email" id="linkedinEmail" placeholder="you@example.com">
-        </div>
-        <div class="form-group">
-          <label for="linkedinPassword">LinkedIn Password *</label>
-          <input type="password" id="linkedinPassword" placeholder="••••••••">
-          <small>🔒 Stored locally only — never uploaded</small>
-        </div>
-
-        <div class="login-status" id="linkedinLoginStatus"></div>
-
-        <button id="saveLoginBtn" class="btn btn-primary">Save & Continue →</button>
-        
-        <div class="divider"><span>or</span></div>
-        <button id="skipLoginBtn" class="btn btn-secondary">I'll log in manually</button>
+        <p class="hint">For your security, JobPilot AI never asks for or stores your LinkedIn credentials. Sign in to LinkedIn manually in your browser before starting the bot.</p>
+        <button id="continueOnboardingBtn" class="btn btn-primary">Continue without credentials →</button>
       </div>
     </section>
 
@@ -172,17 +157,17 @@
           <input type="checkbox" id="board-glassdoor" value="glassdoor" checked>
           <span>Glassdoor</span>
         </label>
-        <label class="board-checkbox">
-          <input type="checkbox" id="board-naukri" value="naukri">
-          <span>Naukri</span>
+        <label class="board-checkbox" title="Coming soon — no production scraper is configured for Naukri yet">
+          <input type="checkbox" id="board-naukri" value="naukri" disabled>
+          <span>Naukri (coming soon)</span>
         </label>
-        <label class="board-checkbox">
-          <input type="checkbox" id="board-uplers" value="uplers">
-          <span>Uplers</span>
+        <label class="board-checkbox" title="Coming soon — no production scraper is configured for Uplers yet">
+          <input type="checkbox" id="board-uplers" value="uplers" disabled>
+          <span>Uplers (coming soon)</span>
         </label>
-        <label class="board-checkbox">
-          <input type="checkbox" id="board-adzuna" value="adzuna">
-          <span>Adzuna</span>
+        <label class="board-checkbox" title="Coming soon — no production scraper is configured for Adzuna yet">
+          <input type="checkbox" id="board-adzuna" value="adzuna" disabled>
+          <span>Adzuna (coming soon)</span>
         </label>
       </div>
 
@@ -232,6 +217,30 @@
         <span id="jobPageInfo" class="page-info">Page 1 of 1</span>
         <button id="jobNextPage" class="btn btn-secondary btn-sm">Next →</button>
       </div>
+
+      <!-- AI-ranked review workflow. Discovery and review never consume application quota. -->
+      <section class="job-matches-review" aria-labelledby="jobMatchesHeading">
+        <h2 id="jobMatchesHeading">AI-Ranked Matches</h2>
+        <p class="hint">Uses your saved resume and filters. Selected jobs are opened for human review; they are not marked submitted and no application quota is consumed.</p>
+        <div class="actions">
+          <button id="discoverMatchesBtn" class="btn btn-primary">Discover Matches</button>
+          <button id="cancelMatchesBtn" class="btn btn-secondary" disabled>Cancel Search</button>
+          <button id="applySelectedMatchesBtn" class="btn btn-secondary">Open Selected</button>
+        </div>
+        <p id="jobMatchesProgress" class="hint" role="status" aria-live="polite"></p>
+        <p id="jobMatchesWarnings" class="job-results-warning" aria-live="polite"></p>
+        <p id="jobMatchesStatus" class="job-matches-status" role="status" aria-live="polite"></p>
+        <div id="jobMatchesResults" class="job-matches-results"></div>
+        <div id="jobMatchesPagination" class="pagination" hidden>
+          <button id="jobMatchesPrevBtn" type="button" class="btn btn-secondary">Previous</button>
+          <span id="jobMatchesPageInfo"></span>
+          <button id="jobMatchesNextBtn" type="button" class="btn btn-secondary">Next</button>
+        </div>
+        <details>
+          <summary>Recent confirmed application history</summary>
+          <div id="jobMatchesHistory" class="job-matches-results"></div>
+        </details>
+      </section>
     </section>
 
     <!-- Tracker Tab -->
@@ -241,7 +250,7 @@
       <!-- Gmail Connection Section -->
       <div id="gmailConnectSection" class="gmail-connect-section">
         <div class="gmail-connect-card">
-          <p class="hint">Connect your Gmail to automatically detect interview invitations, rejections, and offers.</p>
+          <p class="hint">Experimental Gmail classification is available only in builds with configured OAuth and is not a validated production capability.</p>
           <button id="gmailConnectBtn" class="btn btn-primary">📧 Connect Gmail</button>
         </div>
       </div>
@@ -430,7 +439,7 @@
       </div>
       <div class="form-group">
         <label for="currentExperience">Your Current Experience (years)</label>
-        <input type="number" id="currentExperience" value="3" min="-1">
+        <input type="number" id="currentExperience" min="-1" placeholder="Enter your experience">
         <small>Set -1 to apply regardless of required experience</small>
       </div>
       <div class="form-group">
@@ -447,11 +456,12 @@
       
       <div class="form-group">
         <label for="yearsOfExperience">Years of Experience</label>
-        <input type="text" id="yearsOfExperience" placeholder="3">
+        <input type="text" id="yearsOfExperience" placeholder="Enter your experience">
       </div>
       <div class="form-group">
         <label for="requireVisa">Require Visa Sponsorship?</label>
         <select id="requireVisa">
+          <option value="">Select an option</option>
           <option value="No">No</option>
           <option value="Yes">Yes</option>
         </select>
@@ -467,6 +477,7 @@
       <div class="form-group">
         <label for="usCitizenship">Citizenship Status</label>
         <select id="usCitizenship">
+          <option value="">Select an option</option>
           <option value="Other">Other</option>
           <option value="U.S. Citizen/Permanent Resident">U.S. Citizen/Permanent Resident</option>
           <option value="Non-citizen allowed to work for any employer">Non-citizen allowed to work for any employer</option>
@@ -534,24 +545,12 @@
         <button id="logoutBtn" class="btn btn-danger btn-sm">Logout</button>
       </div>
 
-      <h2>LinkedIn Account</h2>
+      <h2>LinkedIn Login</h2>
       <div class="account-card" id="accountCard">
         <div class="account-info">
-          <span class="account-email" id="accountEmail">Not configured</span>
-          <span class="account-badge" id="accountBadge">●</span>
+          <span class="account-email">Sign in directly on LinkedIn before starting the bot.</span>
+          <span class="account-badge">Manual</span>
         </div>
-        <button id="changeLoginBtn" class="btn btn-secondary btn-sm">Change Credentials</button>
-      </div>
-      <div id="changeLoginForm" style="display: none;">
-        <div class="form-group">
-          <label for="updateEmail">LinkedIn Email</label>
-          <input type="email" id="updateEmail" placeholder="you@example.com">
-        </div>
-        <div class="form-group">
-          <label for="updatePassword">LinkedIn Password</label>
-          <input type="password" id="updatePassword" placeholder="••••••••">
-        </div>
-        <button id="updateLoginBtn" class="btn btn-primary btn-sm">Update</button>
       </div>
 
       <h2>Activity Tracking</h2>
@@ -563,8 +562,8 @@
 
       <h2>Bot Settings</h2>
       <div class="form-group checkbox-group">
-        <input type="checkbox" id="pauseBeforeSubmit" checked>
-        <label for="pauseBeforeSubmit">Pause before submitting (review mode)</label>
+        <input type="checkbox" id="pauseBeforeSubmit">
+        <label for="pauseBeforeSubmit">Ask me to confirm before each submission (recommended). Turn off to auto-submit without a prompt.</label>
       </div>
       <div class="form-group checkbox-group">
         <input type="checkbox" id="followCompanies">
@@ -582,28 +581,9 @@
       <h2>AI Settings (Optional)</h2>
       <div class="form-group checkbox-group">
         <input type="checkbox" id="useAI">
-        <label for="useAI">Use AI for answering unknown questions</label>
+        <label for="useAI">Use server-managed AI for job matching and draft assistance</label>
       </div>
-      <div class="form-group">
-        <label for="aiProvider">AI Provider</label>
-        <select id="aiProvider">
-          <option value="openai">OpenAI / Compatible</option>
-          <option value="gemini">Google Gemini</option>
-          <option value="deepseek">DeepSeek</option>
-        </select>
-      </div>
-      <div class="form-group">
-        <label for="aiApiUrl">AI API URL</label>
-        <input type="url" id="aiApiUrl" placeholder="https://api.openai.com/v1/">
-      </div>
-      <div class="form-group">
-        <label for="aiApiKey">AI API Key</label>
-        <input type="password" id="aiApiKey" placeholder="sk-...">
-      </div>
-      <div class="form-group">
-        <label for="aiModel">AI Model</label>
-        <input type="text" id="aiModel" placeholder="gpt-4o-mini">
-      </div>
+      <p class="hint">AI provider credentials are configured only in the deployed Cloud Functions environment. Candidate facts that are missing are left for manual input.</p>
 
       <h2>HR Outreach Settings</h2>
       <div class="form-group">
@@ -639,17 +619,22 @@
       <div class="footer-brand">
         <span class="footer-logo">⚡</span>
         <span class="footer-name">JobPilot AI</span>
-        <span class="footer-version">v1.3.0</span>
+        <span class="footer-version">v2.0.0</span>
       </div>
       <p class="footer-links">
         <a href="#" id="feedbackLink">Feedback</a>
         <span>·</span>
-        <a href="https://jobpilot.ai" target="_blank">Website</a>
+        <a href="https://jobpilot.ai" target="_blank" rel="noopener noreferrer">Website</a>
       </p>
-      <p class="footer-credit">Built by <a href="https://www.linkedin.com/in/mukul---gupta/" target="_blank">Mukul Gupta</a></p>
+      <p class="footer-credit">Built for privacy-conscious job seekers.</p>
     </footer>
   </div>
   <script src="../core/constants.js"></script>
+  <script src="../core/runtime-config.js"></script>
+  <script src="../modules/shared/errors.js"></script>
+  <script src="../modules/shared/logger.js"></script>
+  <script src="../modules/shared/storage-provider.js"></script>
+  <script src="../modules/shared/message-protocol.js"></script>
   <script src="../core/firebase.js"></script>
   <script src="../modules/database/cache-manager.js"></script>
   <script src="../modules/database/firestore-service.js"></script>
@@ -657,8 +642,7 @@
   <script src="../modules/shared/validators.js"></script>
   <script src="../modules/shared/filters.js"></script>
   <script src="../modules/auth/auth-service.js"></script>
-  <script src="../modules/database/user-repository.js"></script>
-  <script src="../modules/database/sync-service.js"></script>
+  <script src="../modules/database/credential-migration.js"></script>
   <script src="../modules/subscription/plan-config.js"></script>
   <script src="../modules/database/usage-repository.js"></script>
   <script src="../modules/subscription/plan-service.js"></script>
@@ -668,9 +652,21 @@
   <script src="../modules/fit-score/fit-score-service.js"></script>
   <script src="../modules/visa/visa-service.js"></script>
   <script src="../modules/tracker/tracker-service.js"></script>
+  <script src="../modules/jobs/job-domain.js"></script>
+  <script src="../modules/jobs/job-normalizers.js"></script>
+  <script src="../modules/jobs/job-policy.js"></script>
+  <script src="../modules/jobs/ai-match-validator.js"></script>
+  <script src="../modules/platforms/platform-adapter.js"></script>
+  <script src="../modules/platforms/linkedin-adapter.js"></script>
+  <script src="../modules/platforms/platform-registry.js"></script>
+  <script src="../modules/applications/application-state.js"></script>
+  <script src="../modules/applications/application-orchestrator.js"></script>
+  <script src="../modules/applications/application-history-service.js"></script>
+  <script src="../modules/matching/job-matching-service.js"></script>
   <script src="screens/pricing-screen.js"></script>
   <script src="components/skill-map-editor.js"></script>
   <script src="popup.js"></script>
   <script src="jobs-tracker-handlers.js"></script>
+  <script src="screens/job-matches-screen.js"></script>
 </body>
 </html>

@@ -10,94 +10,36 @@ beforeEach(() => {
   resetChromeMocks();
 });
 
-describe('Admin role - getUserPlanStatus()', () => {
-  it('should return pro plan with no expiry for admin users', async () => {
+describe('Cached admin role is non-authoritative', () => {
+  it('should not elevate a cached free plan', async () => {
+    setMockStorageData({ userRole: 'admin', userPlan: 'free' });
+
+    const status = await getUserPlanStatus();
+
+    expect(status).toMatchObject({ plan: 'free', isActive: true, role: 'admin' });
+    await expect(isProUser()).resolves.toBe(false);
+  });
+
+  it('should not bypass monthly limits from local role storage', async () => {
+    setMockStorageData({ userRole: 'admin', userPlan: 'free' });
+
+    await expect(canPerformAction('applications')).resolves.toMatchObject({
+      allowed: true,
+      current: null,
+      limit: 10,
+    });
+    await expect(canPerformAction('hrMessages')).resolves.toMatchObject({ limit: 10 });
+    await expect(canPerformAction('aiAnswers')).resolves.toMatchObject({ allowed: false });
+  });
+
+  it('should recognize only an active cached Pro subscription for display', async () => {
     setMockStorageData({
       userRole: 'admin',
       userPlan: 'pro',
+      planExpiresAt: new Date(Date.now() + 86400000).toISOString(),
     });
 
-    const status = await getUserPlanStatus();
-    expect(status.plan).toBe('pro');
-    expect(status.isActive).toBe(true);
-    expect(status.expiresAt).toBeNull();
-    expect(status.role).toBe('admin');
-  });
-
-  it('should return pro even if userPlan is free but role is admin', async () => {
-    setMockStorageData({
-      userRole: 'admin',
-      userPlan: 'free', // This shouldn't matter for admin
-    });
-
-    const status = await getUserPlanStatus();
-    expect(status.plan).toBe('pro');
-    expect(status.isActive).toBe(true);
-  });
-
-  it('should return role field in response', async () => {
-    setMockStorageData({
-      userRole: 'user',
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-    });
-
-    const status = await getUserPlanStatus();
-    expect(status.role).toBe('user');
-  });
-});
-
-describe('Admin role - canPerformAction()', () => {
-  it('should bypass all limits for admin users', async () => {
-    setMockStorageData({
-      userRole: 'admin',
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 999, hrMessages: 999 },
-    });
-
-    const appResult = await canPerformAction('applications');
-    expect(appResult.allowed).toBe(true);
-    expect(appResult.limit).toBe('∞');
-
-    const hrResult = await canPerformAction('hrMessages');
-    expect(hrResult.allowed).toBe(true);
-
-    const aiResult = await canPerformAction('aiAnswers');
-    expect(aiResult.allowed).toBe(true);
-  });
-
-  it('should NOT bypass limits for regular users', async () => {
-    setMockStorageData({
-      userRole: 'user',
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 3, hrMessages: 0 },
-    });
-
-    const result = await canPerformAction('applications');
-    expect(result.allowed).toBe(false);
-  });
-});
-
-describe('Admin role - isProUser()', () => {
-  it('should return true for admin regardless of plan field', async () => {
-    setMockStorageData({
-      userRole: 'admin',
-      userPlan: 'free',
-    });
-
-    const result = await isProUser();
-    expect(result).toBe(true);
-  });
-
-  it('should return false for regular user on free plan', async () => {
-    setMockStorageData({
-      userRole: 'user',
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-    });
-
-    const result = await isProUser();
-    expect(result).toBe(false);
+    await expect(isProUser()).resolves.toBe(true);
   });
 });
 

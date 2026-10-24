@@ -1,6 +1,7 @@
 // popup.js - Extension popup UI logic
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
+  await removeLegacyLinkedInCredentials();
   initAuthUI();
 });
 
@@ -42,8 +43,9 @@ function initAuthUI() {
   });
 
   // Listen for auth state changes
-  onAuthStateChange((user) => {
+  onAuthStateChange(async (user) => {
     if (user) {
+      await removeLegacyLinkedInCredentials(user.uid);
       // Cache user email for content script context
       chrome.storage.local.set({ cachedUserEmail: user.email });
       // Small delay to ensure auth token is fully ready before Firestore read
@@ -189,26 +191,47 @@ function showScreen(screenId) {
   }
 }
 
-// ===== ONBOARDING (LinkedIn credentials) =====
+// ===== ONBOARDING (manual LinkedIn login) =====
 async function checkOnboardingState() {
   const user = getCurrentUser();
   if (!user) return;
 
-  // Check if onboarding is complete (from Firestore user doc via cache)
   const userData = await loadUserProfile(user.uid);
   const isComplete = userData && userData.onboardingComplete;
-
-  // Also check local flag (for faster subsequent checks)
   const localData = await getStorageData(['onboardingComplete']);
 
   if (isComplete || localData.onboardingComplete) {
     showMainApp();
   } else {
     showScreen('onboarding');
-    // Attach listeners for onboarding buttons
-    document.getElementById('saveLoginBtn').addEventListener('click', saveLogin);
-    document.getElementById('skipLoginBtn').addEventListener('click', skipLogin);
+    document.getElementById('continueOnboardingBtn')?.addEventListener(
+      'click',
+      completeOnboarding,
+      { once: true },
+    );
   }
+}
+
+async function completeOnboarding() {
+  const user = getCurrentUser();
+  if (!user) return;
+
+  await removeLegacyLinkedInCredentials(user.uid);
+  try {
+    await db.collection('users').doc(user.uid).update({
+      onboardingComplete: true,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    console.warn('[Popup] Could not persist onboarding status.', error);
+  }
+
+  await chrome.storage.local.set({
+    onboardingComplete: true,
+    setupDate: new Date().toISOString(),
+  });
+  await trackSession('setup');
+  showMainApp();
 }
 
 function showMainApp() {
@@ -236,59 +259,6 @@ async function checkAndShowExpiryAlert() {
   if (expiry.message) {
     addLogEntry(expiry.message, expiry.daysLeft <= 1 ? 'error' : 'warning');
   }
-}
-
-async function saveLogin() {
-  const email = document.getElementById('linkedinEmail').value.trim();
-  const password = document.getElementById('linkedinPassword').value;
-  const statusEl = document.getElementById('linkedinLoginStatus');
-
-  if (!email || !password) {
-    statusEl.textContent = '⚠ Please enter both email and password.';
-    statusEl.className = 'login-status error';
-    return;
-  }
-
-  if (!email.includes('@')) {
-    statusEl.textContent = '⚠ Please enter a valid email address.';
-    statusEl.className = 'login-status error';
-    return;
-  }
-
-  statusEl.textContent = '✓ Credentials saved securely!';
-  statusEl.className = 'login-status success';
-
-  // Obfuscate credentials before storing
-  const obfuscatedEmail = btoa(encodeURIComponent(email));
-  const obfuscatedPassword = btoa(encodeURIComponent(password));
-
-  const user = getCurrentUser();
-  if (user) {
-    // Save to Firestore
-    await saveLinkedinCredentials(user.uid, {
-      email: obfuscatedEmail,
-      password: obfuscatedPassword,
-    });
-    // Also update user doc with onboarding flag
-    await db.collection('users').doc(user.uid).update({
-      onboardingComplete: true,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-  }
-
-  // Keep bot-state flags in chrome.storage.local (ephemeral, not user data)
-  await chrome.storage.local.set({
-    onboardingComplete: true,
-    setupDate: new Date().toISOString()
-  });
-
-  await trackSession('setup');
-  setTimeout(() => showMainApp(), 800);
-}
-
-function skipLogin() {
-  chrome.storage.local.set({ onboardingComplete: true, loginMode: 'manual' });
-  showMainApp();
 }
 
 // Tab Navigation
@@ -326,7 +296,8 @@ async function loadAllSettings() {
   const prefs = userData.preferences || {};
   const templates = userData.templates || {};
   const botSettings = userData.botSettings || {};
-  const linkedinCreds = userData.linkedinCredentials || {};
+
+  await removeLegacyLinkedInCredentials(user.uid);
 
   // Profile
   setVal('firstName', profile.firstName);
@@ -353,7 +324,7 @@ async function loadAllSettings() {
   setChecked('easyApplyOnly', prefs.easyApplyOnly !== false);
   if (prefs.badWords) document.getElementById('badWords').value = prefs.badWords.join('\n');
   if (prefs.blacklistCompanies) document.getElementById('blacklistCompanies').value = prefs.blacklistCompanies.join('\n');
-  setVal('currentExperience', prefs.currentExperience ?? 3);
+  setVal('currentExperience', prefs.currentExperience ?? '');
   setVal('switchNumber', prefs.switchNumber ?? 30);
 
   // Questions (extended profile fields)
@@ -371,24 +342,14 @@ async function loadAllSettings() {
   setVal('linkedinSummary', profile.linkedinSummary);
   setVal('coverLetter', templates.coverLetter);
 
-  // Settings - Account (LinkedIn credentials)
-  if (linkedinCreds && linkedinCreds.email) {
-    let displayEmail = linkedinCreds.email;
-    try { displayEmail = decodeURIComponent(atob(linkedinCreds.email)); } catch (e) { /* use raw */ }
-    document.getElementById('accountEmail').textContent = displayEmail;
-    document.getElementById('accountBadge').style.color = '#28a745';
-  }
-
   // Settings - Bot
   setChecked('pauseBeforeSubmit', botSettings.pauseBeforeSubmit === true);
   setChecked('followCompanies', botSettings.followCompanies === true);
   setChecked('messageRecruiter', botSettings.messageRecruiter !== false);
   setVal('clickGap', botSettings.clickGap ?? 2);
   setChecked('useAI', botSettings.useAI === true);
-  setVal('aiProvider', botSettings.aiProvider);
-  setVal('aiApiUrl', botSettings.aiApiUrl);
-  setVal('aiApiKey', botSettings.aiApiKey);
-  setVal('aiModel', botSettings.aiModel);
+  // Remove legacy client-side provider credentials; AI now runs only in Cloud Functions.
+  chrome.storage.local.remove(['aiProvider', 'aiApiUrl', 'aiApiKey', 'aiModel']);
 
   // HR Outreach — no hardcoded default template
   setVal('hrMessageTemplate', templates.hrMessage || '');
@@ -472,39 +433,6 @@ function initButtons() {
   document.getElementById('stopHRBtn').addEventListener('click', stopHRMessages);
   document.getElementById('exportData').addEventListener('click', exportHistory);
   document.getElementById('clearData').addEventListener('click', clearAllData);
-
-  // Account management
-  document.getElementById('changeLoginBtn').addEventListener('click', () => {
-    const form = document.getElementById('changeLoginForm');
-    form.style.display = form.style.display === 'none' ? 'block' : 'none';
-  });
-  document.getElementById('updateLoginBtn').addEventListener('click', updateLogin);
-}
-
-async function updateLogin() {
-  const email = document.getElementById('updateEmail').value.trim();
-  const password = document.getElementById('updatePassword').value;
-
-  if (!email || !password) {
-    showNotification('Please enter both email and password.', 'error');
-    return;
-  }
-
-  // Obfuscate credentials before storing
-  const obfuscatedEmail = btoa(encodeURIComponent(email));
-  const obfuscatedPassword = btoa(encodeURIComponent(password));
-
-  const user = getCurrentUser();
-  if (user) {
-    await saveLinkedinCredentials(user.uid, {
-      email: obfuscatedEmail,
-      password: obfuscatedPassword,
-    });
-  }
-
-  document.getElementById('accountEmail').textContent = email;
-  document.getElementById('changeLoginForm').style.display = 'none';
-  showNotification('Credentials updated!');
 }
 
 // Save functions — Write to Firestore first, then update local cache
@@ -545,6 +473,8 @@ async function saveSearch() {
   const user = getCurrentUser();
   if (!user) { showNotification('Please sign in first.', 'error'); return; }
 
+  const currentExperienceValue = getVal('currentExperience');
+  const parsedCurrentExperience = currentExperienceValue === '' ? null : Number(currentExperienceValue);
   const prefs = {
     searchTerms: getVal('searchTerms').split('\n').map(s => s.trim()).filter(Boolean),
     searchLocation: getVal('searchLocation'),
@@ -555,12 +485,13 @@ async function saveSearch() {
     easyApplyOnly: getChecked('easyApplyOnly'),
     badWords: getVal('badWords').split('\n').map(s => s.trim()).filter(Boolean),
     blacklistCompanies: getVal('blacklistCompanies').split('\n').map(s => s.trim()).filter(Boolean),
-    currentExperience: parseInt(getVal('currentExperience')) || 3,
+    currentExperience: Number.isFinite(parsedCurrentExperience) ? parsedCurrentExperience : null,
     switchNumber: parseInt(getVal('switchNumber')) || 30,
   };
 
   const success = await savePreferences(user.uid, prefs);
   if (success) {
+    await saveSearchPreferences({ location: prefs.searchLocation });
     showNotification('Search preferences saved!');
   } else {
     showNotification('Failed to save preferences. Check your connection.', 'error');
@@ -571,6 +502,12 @@ async function saveQuestions() {
   const user = getCurrentUser();
   if (!user) { showNotification('Please sign in first.', 'error'); return; }
 
+  const parseOptionalNumber = value => {
+    if (value === '') return null;
+    const parsedValue = Number(value);
+    return Number.isFinite(parsedValue) && parsedValue >= 0 ? parsedValue : null;
+  };
+
   // Questions are part of the profile (extended personal data)
   const questionData = {
     yearsOfExperience: getVal('yearsOfExperience'),
@@ -578,9 +515,9 @@ async function saveQuestions() {
     website: getVal('website'),
     linkedInUrl: getVal('linkedInUrl'),
     usCitizenship: getVal('usCitizenship'),
-    desiredSalary: parseInt(getVal('desiredSalary')) || 0,
-    currentCtc: parseInt(getVal('currentCtc')) || 0,
-    noticePeriod: parseInt(getVal('noticePeriod')) || 0,
+    desiredSalary: parseOptionalNumber(getVal('desiredSalary')),
+    currentCtc: parseOptionalNumber(getVal('currentCtc')),
+    noticePeriod: parseOptionalNumber(getVal('noticePeriod')),
     recentEmployer: getVal('recentEmployer'),
     confidenceLevel: getVal('confidenceLevel'),
     linkedinHeadline: getVal('linkedinHeadline'),
@@ -630,11 +567,8 @@ async function saveSettings() {
     messageRecruiter: getChecked('messageRecruiter'),
     clickGap: parseInt(getVal('clickGap')) || 2,
     useAI: getChecked('useAI'),
-    aiProvider: getVal('aiProvider'),
-    aiApiUrl: getVal('aiApiUrl'),
-    aiApiKey: getVal('aiApiKey'),
-    aiModel: getVal('aiModel'),
   };
+  chrome.storage.local.remove(['aiProvider', 'aiApiUrl', 'aiApiKey', 'aiModel']);
 
   const templates = {
     hrMessage: getVal('hrMessageTemplate'),
@@ -669,15 +603,12 @@ async function startApplying() {
   const user = getCurrentUser();
   if (!user) { showNotification('Please sign in first.', 'error'); return; }
 
-  // Load profile from Firestore (cached)
   const userData = await loadUserProfile(user.uid);
   if (!userData) { showNotification('Failed to load your profile.', 'error'); return; }
 
   const prefs = userData.preferences || {};
   const profile = userData.profile || {};
-  const linkedinCreds = userData.linkedinCredentials || {};
-
-  if (!prefs.searchTerms || prefs.searchTerms.length === 0) {
+  if (!Array.isArray(prefs.searchTerms) || prefs.searchTerms.length === 0) {
     showNotification('Please configure search terms first!', 'error');
     return;
   }
@@ -686,50 +617,52 @@ async function startApplying() {
     return;
   }
 
-  // Track this session
-  await trackSession('start');
+  const storedBotSettings = userData.botSettings || {};
+  const parsedClickGap = Number(storedBotSettings.clickGap);
+  const botSettings = {
+    pauseBeforeSubmit: storedBotSettings.pauseBeforeSubmit === true,
+    followCompanies: storedBotSettings.followCompanies === true,
+    messageRecruiter: storedBotSettings.messageRecruiter !== false,
+    clickGap: Number.isFinite(parsedClickGap) ? parsedClickGap : 2,
+    useAI: storedBotSettings.useAI === true,
+  };
 
-  // Store config in chrome.storage.local for the content script bot to read
-  // This is the bridge between popup (Firestore) and content script (needs fast local access)
+  await trackSession('start');
+  await removeLegacyLinkedInCredentials(user.uid);
   await chrome.storage.local.set({
-    // Flatten Firestore structure into what the bot expects
     ...profile,
     ...prefs,
-    ...(userData.botSettings || {}),
+    ...botSettings,
     skillMap: userData.skillMap || {},
     templates: userData.templates || {},
-    linkedinEmail: linkedinCreds.email || null,
-    linkedinPassword: linkedinCreds.password || null,
-    credentialsObfuscated: true,
   });
 
-  // Check if we're on LinkedIn
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const isOnLinkedIn = tab && tab.url && tab.url.includes('linkedin.com');
-  const loginMode = linkedinCreds.email ? 'auto' : 'manual';
+  const tabUrl = tab?.url || '';
+  const isOnLinkedIn = tabUrl.includes('linkedin.com');
+  const requiresManualLogin = /linkedin\.com\/(login|checkpoint)|linkedin\.com\/authwall/.test(tabUrl);
+
+  await chrome.storage.local.set({ botRunning: true });
+  updateUI(true);
 
   if (!isOnLinkedIn) {
-    if (loginMode === 'manual') {
-      await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/' });
-      chrome.storage.local.set({ botRunning: true, pendingAutoLogin: false });
-      showNotification('Opening LinkedIn... Please log in, then bot will start.', 'info');
-    } else {
-      await chrome.tabs.create({ url: 'https://www.linkedin.com/login' });
-      chrome.storage.local.set({ botRunning: true, pendingAutoLogin: true });
-      showNotification('Opening LinkedIn... Auto-login will be attempted.', 'info');
-    }
-    updateUI(true);
+    await chrome.tabs.create({ url: 'https://www.linkedin.com/feed/' });
+    showNotification('Opening LinkedIn. Sign in manually if prompted; the bot will continue after login.', 'info');
     return;
   }
 
-  chrome.storage.local.set({ botRunning: true, pendingAutoLogin: false });
-  chrome.runtime.sendMessage({ action: 'start' });
-  updateUI(true);
+  if (requiresManualLogin) {
+    showNotification('Please sign in to LinkedIn manually. The bot will continue after login.', 'info');
+    return;
+  }
+
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.START_BOT));
 }
 
 function stopApplying() {
-  chrome.storage.local.set({ botRunning: false, pendingAutoLogin: false });
-  chrome.runtime.sendMessage({ action: 'stop' });
+  chrome.storage.local.set({ botRunning: false });
+  chrome.storage.local.remove('pendingAutoLogin');
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.STOP_BOT));
   updateUI(false);
   trackSession('stop');
 }
@@ -793,7 +726,7 @@ async function startHRMessages() {
     await chrome.tabs.create({ url: 'https://www.linkedin.com/search/results/people/?keywords=recruiter%20OR%20HR%20OR%20talent%20acquisition&network=%5B%22F%22%5D&origin=FACETED_SEARCH' });
   }
 
-  chrome.runtime.sendMessage({ action: 'startHR' });
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.START_HR));
 
   document.getElementById('messageHRsBtn').disabled = true;
   document.getElementById('stopHRBtn').disabled = false;
@@ -803,7 +736,7 @@ async function startHRMessages() {
 
 function stopHRMessages() {
   chrome.storage.local.set({ hrBotRunning: false });
-  chrome.runtime.sendMessage({ action: 'stopHR' });
+  chrome.runtime.sendMessage(MessageProtocol.create(MessageType.STOP_HR));
   document.getElementById('messageHRsBtn').disabled = false;
   document.getElementById('stopHRBtn').disabled = true;
   document.getElementById('hrStatus').textContent = '';
@@ -837,18 +770,17 @@ async function trackSession(type) {
 
 // Status updates listener
 function initStatusUpdates() {
-  chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === 'status') {
-      document.getElementById('appliedCount').textContent = msg.applied || 0;
-      document.getElementById('skippedCount').textContent = msg.skipped || 0;
-      document.getElementById('failedCount').textContent = msg.failed || 0;
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    const validation = MessageProtocol.validate(message);
+    if (!MessageProtocol.validateSender(sender) || !validation.valid) return false;
+    if (message.type === MessageType.STATUS) {
+      document.getElementById('appliedCount').textContent = message.applied || 0;
+      document.getElementById('skippedCount').textContent = message.skipped || 0;
+      document.getElementById('failedCount').textContent = message.failed || 0;
     }
-    if (msg.type === 'log') {
-      addLogEntry(msg.message, msg.level || 'info');
-    }
-    if (msg.type === 'stopped') {
-      updateUI(false);
-    }
+    if (message.type === MessageType.LOG) addLogEntry(message.message, message.level || 'info');
+    if (message.type === MessageType.STOPPED) updateUI(false);
+    return false;
   });
 
   // Check if bot is currently running
@@ -951,7 +883,7 @@ function convertToCSV(data) {
 }
 
 async function clearAllData() {
-  if (confirm('Are you sure you want to clear ALL data including credentials? This cannot be undone.')) {
+  if (confirm('Are you sure you want to clear ALL extension data? This cannot be undone.')) {
     // Sign out first to prevent auth state listener from firing on empty storage
     try {
       await signOutUser();
@@ -960,6 +892,7 @@ async function clearAllData() {
     // Only remove known extension keys, not all of chrome.storage
     const keysToRemove = [
       'linkedinEmail', 'linkedinPassword', 'credentialsObfuscated',
+      'credentialOwnerUid',
       'onboardingComplete', 'loginMode', 'setupDate',
       'firstName', 'middleName', 'lastName', 'phoneNumber',
       'currentCity', 'street', 'state', 'zipcode', 'country',
@@ -973,6 +906,7 @@ async function clearAllData() {
       'linkedinSummary', 'coverLetter',
       'pauseBeforeSubmit', 'followCompanies', 'messageRecruiter',
       'clickGap', 'useAI', 'aiProvider', 'aiApiUrl', 'aiApiKey', 'aiModel',
+      'applicationStatesV1',
       'hrMessageTemplate', 'hrDailyLimit', 'hrDelayBetween',
       'botRunning', 'hrBotRunning', 'botState', 'hrBotState',
       'pendingAutoLogin', 'applicationHistory', 'messagedHRs',

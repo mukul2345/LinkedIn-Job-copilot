@@ -7,8 +7,8 @@ var PLANS = {
     id: 'free',
     name: 'Free',
     limits: {
-      applicationsPerDay: 3,
-      hrMessagesPerDay: 3,
+      applicationsPerMonth: 10,
+      hrMessagesPerMonth: 10,
       searchTerms: 3,
       messageTemplates: 1,
       aiAnswers: false,
@@ -18,8 +18,8 @@ var PLANS = {
     id: 'pro',
     name: 'Pro',
     limits: {
-      applicationsPerDay: Infinity,
-      hrMessagesPerDay: Infinity,
+      applicationsPerMonth: 50,
+      hrMessagesPerMonth: 50,
       searchTerms: Infinity,
       messageTemplates: Infinity,
       aiAnswers: true,

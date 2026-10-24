@@ -53,9 +53,12 @@ async function searchJobs(params) {
   if (params.datePosted) {
     body.datePosted = params.datePosted;
   }
+  if (params.searchSessionId) {
+    body.searchSessionId = params.searchSessionId;
+  }
 
   // Save preferences on every search
-  saveSearchPreferences({ boards: boards, lastQuery: query.trim() });
+  saveSearchPreferences({ boards: boards, lastQuery: query.trim(), location: params.location || '' });
 
   var result = await callBackend('searchJobs', body);
 
@@ -69,10 +72,11 @@ async function searchJobs(params) {
  */
 async function getSearchPreferences() {
   return new Promise(function (resolve) {
-    chrome.storage.local.get(['searchPrefs_boards', 'searchPrefs_lastQuery'], function (data) {
+    chrome.storage.local.get(['searchPrefs_boards', 'searchPrefs_lastQuery', 'searchPrefs_location'], function (data) {
       resolve({
         boards: data.searchPrefs_boards || [],
         lastQuery: data.searchPrefs_lastQuery || '',
+        location: typeof data.searchPrefs_location === 'string' ? data.searchPrefs_location : '',
       });
     });
   });
@@ -90,10 +94,16 @@ async function saveSearchPreferences(prefs) {
   return new Promise(function (resolve) {
     var data = {};
     if (prefs.boards !== undefined) {
-      data.searchPrefs_boards = prefs.boards;
+      var supportedBoards = prefs.boards.filter(function (board) {
+        return VALID_BOARDS.includes(board);
+      });
+      data.searchPrefs_boards = supportedBoards;
     }
     if (prefs.lastQuery !== undefined) {
-      data.searchPrefs_lastQuery = prefs.lastQuery;
+      data.searchPrefs_lastQuery = typeof prefs.lastQuery === 'string' ? prefs.lastQuery.slice(0, 200) : '';
+    }
+    if (prefs.location !== undefined) {
+      data.searchPrefs_location = typeof prefs.location === 'string' ? prefs.location.trim().slice(0, 200) : '';
     }
     chrome.storage.local.set(data, function () {
       resolve();

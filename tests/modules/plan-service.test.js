@@ -56,87 +56,54 @@ describe('getUserPlanStatus()', () => {
 });
 
 describe('canPerformAction()', () => {
-  it('should allow applications for free user under limit', async () => {
-    setMockStorageData({
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 1, hrMessages: 0 },
-    });
+  it('should defer application quota authorization to the server', async () => {
+    setMockStorageData({ userPlan: 'free' });
 
     const result = await canPerformAction('applications');
-    expect(result.allowed).toBe(true);
-    expect(result.current).toBe(1);
-    expect(result.limit).toBe(3);
-  });
 
-  it('should deny applications for free user at limit', async () => {
-    setMockStorageData({
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 3, hrMessages: 0 },
+    expect(result).toEqual({
+      allowed: true,
+      current: null,
+      limit: 10,
+      reason: 'Monthly quota is verified by the server immediately before the action.',
     });
-
-    const result = await canPerformAction('applications');
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('limit reached');
-    expect(result.reason).toContain('Upgrade to Pro');
   });
 
-  it('should always allow applications for pro user', async () => {
+  it('should expose the Pro monthly application limit without claiming unlimited access', async () => {
     setMockStorageData({
       userPlan: 'pro',
-      planExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 100, hrMessages: 50 },
+      planExpiresAt: new Date(Date.now() + 86400000).toISOString(),
     });
 
-    const result = await canPerformAction('applications');
-    expect(result.allowed).toBe(true);
+    await expect(canPerformAction('applications')).resolves.toMatchObject({
+      allowed: true,
+      current: null,
+      limit: 50,
+    });
+  });
+
+  it('should expose the free monthly outreach limit', async () => {
+    setMockStorageData({ userPlan: 'free' });
+    await expect(canPerformAction('hrMessages')).resolves.toMatchObject({
+      allowed: true,
+      limit: 10,
+    });
   });
 
   it('should deny AI answers for free user', async () => {
-    setMockStorageData({
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
+    setMockStorageData({ userPlan: 'free' });
+    await expect(canPerformAction('aiAnswers')).resolves.toMatchObject({
+      allowed: false,
+      reason: 'AI answers require Pro plan.',
     });
-
-    const result = await canPerformAction('aiAnswers');
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('Pro plan');
   });
 
-  it('should allow AI answers for pro user', async () => {
+  it('should allow AI answers for an active Pro user', async () => {
     setMockStorageData({
       userPlan: 'pro',
-      planExpiresAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-      planCachedAt: new Date().toISOString(),
+      planExpiresAt: new Date(Date.now() + 86400000).toISOString(),
     });
-
-    const result = await canPerformAction('aiAnswers');
-    expect(result.allowed).toBe(true);
-  });
-
-  it('should deny HR messages for free user at limit', async () => {
-    setMockStorageData({
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 0, hrMessages: 3 },
-    });
-
-    const result = await canPerformAction('hrMessages');
-    expect(result.allowed).toBe(false);
-    expect(result.reason).toContain('HR message');
-  });
-
-  it('should allow HR messages for free user under limit', async () => {
-    setMockStorageData({
-      userPlan: 'free',
-      planCachedAt: new Date().toISOString(),
-      [`usage_${new Date().toISOString().split('T')[0]}`]: { applications: 0, hrMessages: 2 },
-    });
-
-    const result = await canPerformAction('hrMessages');
-    expect(result.allowed).toBe(true);
+    await expect(canPerformAction('aiAnswers')).resolves.toMatchObject({ allowed: true });
   });
 });
 

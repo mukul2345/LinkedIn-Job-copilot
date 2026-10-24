@@ -7,9 +7,23 @@ const path = require('path');
 
 const EXT_DIR = path.resolve(__dirname, '../../extension');
 
-// Module paths relative to extension/ root (matches manifest.json content_scripts order)
+// Shared extension module order used by production classic-script contexts.
 const CONTENT_SCRIPT_ORDER = [
   'core/constants.js',
+  'core/runtime-config.js',
+  'modules/shared/errors.js',
+  'modules/shared/logger.js',
+  'modules/shared/storage-provider.js',
+  'modules/shared/message-protocol.js',
+  'modules/jobs/job-domain.js',
+  'modules/jobs/job-normalizers.js',
+  'modules/jobs/job-policy.js',
+  'modules/jobs/ai-match-validator.js',
+  'modules/platforms/platform-adapter.js',
+  'modules/platforms/linkedin-adapter.js',
+  'modules/platforms/platform-registry.js',
+  'modules/applications/application-state.js',
+  'modules/applications/application-orchestrator.js',
   'modules/subscription/plan-config.js',
   'modules/database/usage-repository.js',
   'modules/subscription/plan-service.js',
@@ -47,6 +61,14 @@ function loadModuleByPath(relPath) {
  * @param {string[]} filenames - e.g., ['utils.js', 'selectors.js']
  */
 function loadModules(filenames) {
+  const sharedSeams = [
+    'core/runtime-config.js',
+    'modules/shared/errors.js',
+    'modules/shared/logger.js',
+    'modules/shared/storage-provider.js',
+    'modules/shared/message-protocol.js',
+  ];
+  sharedSeams.forEach(loadModuleByPath);
   for (const filename of filenames) {
     // Map old names to new paths
     const pathMap = {

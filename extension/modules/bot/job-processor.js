@@ -1,6 +1,57 @@
 // job-processor.js - Process individual job cards and handle Easy Apply modal
 
 /**
+ * Ask the server-owned confirmed ledger whether this stable attempt identity was
+ * already applied to, enabling cross-device already-applied protection. A cloud
+ * failure fails open (returns false) so transient errors never block the user.
+ * @param {string} attemptId
+ * @returns {Promise<boolean>}
+ */
+async function hasServerConfirmedApplication(attemptId) {
+  if (typeof fetchAppliedAttemptIds !== 'function') return false;
+  try {
+    const applied = await fetchAppliedAttemptIds([attemptId]);
+    return applied.has(attemptId);
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * Detect a full-page verification redirect that must remain manual. This checks
+ * only the navigation path, so it never false-positives on unrelated page markup
+ * while the normal jobs search or job detail pages are loaded.
+ * @returns {'AUTH_WALL'|'HUMAN_VERIFICATION'|null}
+ */
+function detectLinkedInPageManualIntervention() {
+  const path = String(window.location?.pathname || '').toLowerCase();
+  if (path.startsWith('/authwall') || path.startsWith('/login') ||
+      path.startsWith('/uas/login') || path.startsWith('/checkpoint/lg/login')) {
+    return 'AUTH_WALL';
+  }
+  if (path.startsWith('/checkpoint') || path.startsWith('/challenge')) {
+    return 'HUMAN_VERIFICATION';
+  }
+  return null;
+}
+
+/**
+ * Detect a genuine in-flow verification challenge. Scoped to the active Easy
+ * Apply modal (falling back to document) and combined with the page-path check,
+ * so ambient page markup containing "captcha" substrings is not misread.
+ * @param {Element|Document} root
+ * @returns {'AUTH_WALL'|'HUMAN_VERIFICATION'|'MFA'|'CAPTCHA'|null}
+ */
+function detectLinkedInManualIntervention(root = document) {
+  const pageReason = detectLinkedInPageManualIntervention();
+  if (pageReason) return pageReason;
+  const scope = root && typeof root.querySelector === 'function' ? root : document;
+  if (scope.querySelector('input[autocomplete="one-time-code"], input[name*="otp" i]')) return 'MFA';
+  if (scope.querySelector('iframe[src*="captcha" i], iframe[title*="captcha" i]')) return 'CAPTCHA';
+  return null;
+}
+
+/**
  * Process a single job card - click, check eligibility, apply.
  * @param {Element} card - The job card DOM element
  * @param {object} config - User configuration
@@ -11,6 +62,23 @@ async function processJobCard(card, config, applicationHistory) {
   try {
     const jobId = card.getAttribute('data-occludable-job-id');
     if (!jobId) return 'skipped';
+    const applicationIdentity = buildJobIdentity({
+      platform: JobPlatform.LINKEDIN,
+      platformJobId: jobId,
+    });
+    if (await ApplicationStateRepository.hasSubmitted(applicationIdentity)) return 'skipped';
+    if (await ApplicationStateRepository.hasUncertainAttempt(applicationIdentity)) {
+      log('Skipped a job with an uncertain previous submission attempt. Review it manually.', 'warning');
+      return 'skipped';
+    }
+    if (await hasServerConfirmedApplication(`linkedin:${jobId}`)) {
+      log('Skipped a job already confirmed applied on another device.', 'info');
+      return 'skipped';
+    }
+    const manualInterventionReason = detectLinkedInPageManualIntervention();
+    if (manualInterventionReason) {
+      return { status: 'manual_intervention', reason: manualInterventionReason };
+    }
 
     // Check if already applied (badge on card)
     const appliedBadge = card.querySelector(SELECTORS.appliedBadge);
@@ -26,9 +94,13 @@ async function processJobCard(card, config, applicationHistory) {
     // Get job details
     const titleLink = card.querySelector(SELECTORS.jobTitleLink);
     const subtitleEl = card.querySelector(SELECTORS.jobSubtitle);
-    const title = titleLink ? titleLink.textContent.trim().split('\n')[0] : 'Unknown';
-    const subtitle = subtitleEl ? subtitleEl.textContent.trim() : '';
-    const company = subtitle.split(' · ')[0] || 'Unknown';
+    const title = titleLink?.textContent.trim().split('\n')[0] || '';
+    const subtitle = subtitleEl?.textContent.trim() || '';
+    const company = subtitle.split(' · ')[0] || '';
+    if (!title) {
+      log('Skipped a job with no reliable title.', 'warning');
+      return 'skipped';
+    }
 
     // Check blacklisted companies
     if (config.blacklistCompanies && config.blacklistCompanies.length > 0) {
@@ -49,7 +121,7 @@ async function processJobCard(card, config, applicationHistory) {
         ['.jobs-box__html-content', '.jobs-description__content', '.jobs-search__job-details'],
         8000
       );
-      await sleep(500); // Brief extra wait for button rendering
+      await sleep(250); // Brief extra wait for button rendering
     }
 
     // Check job description for bad words
@@ -63,11 +135,15 @@ async function processJobCard(card, config, applicationHistory) {
       }
     }
 
-    // Check experience requirement
-    if (descEl && config.currentExperience >= 0) {
+    // Check experience only when the user configured an explicit finite value.
+    const hasConfiguredExperience = config.currentExperience != null &&
+      config.currentExperience !== '';
+    const currentExperience = Number(config.currentExperience);
+    if (descEl && hasConfiguredExperience &&
+        Number.isFinite(currentExperience) && currentExperience >= 0) {
       const descText = descEl.textContent;
       const expRequired = extractExperience(descText);
-      if (expRequired > 0 && expRequired > (config.currentExperience || 3) + 2) {
+      if (expRequired > 0 && expRequired > currentExperience + 2) {
         log(`Skipped: "${title}" (needs ${expRequired}yr exp)`, 'warning');
         return 'skipped';
       }
@@ -92,20 +168,18 @@ async function processJobCard(card, config, applicationHistory) {
       return 'skipped';
     }
 
-    if (!easyApplyBtn.textContent.includes('Easy') &&
-        !easyApplyBtn.getAttribute('aria-label')?.includes('Easy')) {
+    if (!easyApplyBtn.textContent.includes('Apply') &&
+        !easyApplyBtn.getAttribute('aria-label')?.includes('Apply')) {
       log(`Skipped: "${title}" (external apply)`, 'warning');
       return 'skipped';
     }
 
     // Scroll button into view before clicking (prevents click miss)
     easyApplyBtn.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    await sleep(400);
+    await sleep(200);
     easyApplyBtn.click();
-    await sleep(1500);
 
-    // Wait for Easy Apply modal (with retry click if first click didn't register)
-    await sleep(1000);
+    // Wait for the Easy Apply modal; polling replaces long fixed sleeps.
     let modal = document.querySelector(SELECTORS.easyApplyModal.join(', '));
     if (!modal) {
       modal = await waitForAnyElement(SELECTORS.easyApplyModal, 5000);
@@ -127,13 +201,47 @@ async function processJobCard(card, config, applicationHistory) {
       return 'failed';
     }
 
-    // Process the multi-step form
-    // Attach current job context to config for AI form answering
-    config._currentJobTitle = title;
-    config._currentCompany = company;
-    const success = await processEasyApplyModal(modal, title, company, config);
+    // Keep job context separate from the immutable candidate profile snapshot.
+    const applicationConfig = {
+      ...config,
+      _currentJobTitle: title,
+      _currentCompany: company,
+      _currentJobId: jobId,
+    };
+    const submissionResult = await processEasyApplyModal(
+      modal,
+      title,
+      company,
+      applicationConfig,
+      `linkedin:${jobId}`
+    );
 
-    if (success) {
+    if (submissionResult && typeof submissionResult === 'object') {
+      const attemptedJob = createJob({
+        id: applicationIdentity,
+        platform: JobPlatform.LINKEDIN,
+        platformJobId: jobId,
+        title,
+        company,
+        url: `https://www.linkedin.com/jobs/view/${jobId}`,
+        applicationCapability: ApplicationCapability.DIRECT_APPLY,
+      });
+      const transition = submissionResult.status === 'submission_unconfirmed'
+        ? { state: ApplicationState.FAILED, reasonCodes: ['SUBMISSION_UNCONFIRMED'] }
+        : submissionResult.status === 'review_required'
+          ? { state: ApplicationState.REVIEW_REQUIRED, reasonCodes: ['FINAL_REVIEW_REQUIRED'] }
+          : submissionResult.status === 'manual_intervention'
+            ? { state: ApplicationState.MANUAL_INTERVENTION, reasonCodes: [submissionResult.reason] }
+            : { state: ApplicationState.NEEDS_USER_INPUT, reasonCodes: ['NEEDS_USER_INPUT'] };
+      await ApplicationStateRepository.transition(attemptedJob, transition.state, {
+        attemptId: `linkedin:${jobId}`,
+        reasonCodes: transition.reasonCodes,
+      });
+      await discardApplication();
+      return submissionResult;
+    }
+
+    if (submissionResult) {
       log(`Applied: "${title}" at ${company}`, 'success');
       const jobLink = `https://www.linkedin.com/jobs/view/${jobId}`;
       applicationHistory.push({
@@ -144,11 +252,35 @@ async function processJobCard(card, config, applicationHistory) {
         date: new Date().toISOString(),
         status: 'applied'
       });
+      await incrementApplicationCount();
+      const submittedJob = createJob({
+        id: applicationIdentity,
+        platform: JobPlatform.LINKEDIN,
+        platformJobId: jobId,
+        title,
+        company,
+        url: jobLink,
+        applicationCapability: ApplicationCapability.DIRECT_APPLY,
+      });
+      await ApplicationStateRepository.transition(submittedJob, ApplicationState.SUBMITTED, {
+        confirmed: true,
+        receiptId: jobLink,
+      });
+      try {
+        await recordConfirmedApplication({
+          job: submittedJob,
+          outcome: 'SUBMITTED_CONFIRMED',
+          attemptId: `linkedin:${jobId}`,
+          receiptId: jobLink,
+        });
+      } catch (error) {
+        log('Submission was confirmed, but cloud history sync is pending.', 'warning');
+      }
 
       // Try to message the recruiter/hiring manager (non-blocking)
       if (config.messageRecruiter !== false) {
         try {
-          await messageRecruiter(title, company, config);
+          await messageRecruiter(title, company, config, jobId);
         } catch (e) {
           log(`Recruiter msg skipped: ${e.message}`, 'info');
         }
@@ -169,15 +301,85 @@ async function processJobCard(card, config, applicationHistory) {
 }
 
 /**
- * Process the Easy Apply multi-step modal form.
- * @returns {boolean} - Whether application was submitted successfully
+ * Build a stable signature of the current Easy Apply step so the loop can tell
+ * whether clicking Next/Continue actually advanced the form. Combines the
+ * progress percentage (when present) with the visible question labels.
+ * @param {Element} modal
+ * @returns {string}
  */
-async function processEasyApplyModal(modal, title, company, config) {
+function getModalStepSignature(modal) {
+  if (!modal) return '';
+  const progress = modal.querySelector('progress, [role="progressbar"]');
+  const progressValue = progress
+    ? (progress.getAttribute('value') || progress.getAttribute('aria-valuenow') || '')
+    : '';
+  const labels = [...modal.querySelectorAll('label, legend, h3')]
+    .map(element => (element.textContent || '').trim())
+    .filter(Boolean)
+    .slice(0, 8)
+    .join('|');
+  return `${progressValue}::${labels}`;
+}
+
+/**
+ * Decide whether to show the final review confirmation before an irreversible
+ * LinkedIn submission. Defaults to false (auto-submit): the dialog only shows
+ * when the user has explicitly turned on "pause before submit" in settings.
+ * @param {object} config
+ * @returns {Promise<boolean>}
+ */
+async function shouldPauseBeforeSubmit(config) {
+  return config?.pauseBeforeSubmit === true;
+}
+
+/**
+ * Consume one application quota unit immediately before submitting.
+ * Returns null when submission is allowed. Only genuine monthly exhaustion
+ * (no errorCode) blocks submission. Transient service/network failures are
+ * treated as "allow" so an unreachable backend never prevents applying.
+ *
+ * @param {string} attemptId - Stable job/application attempt identifier
+ * @returns {Promise<null|{status: 'limit_reached', quota: object}>}
+ */
+async function consumeApplicationQuotaForSubmit(attemptId) {
+  let quota;
+  try {
+    quota = await consumeQuota('application', attemptId);
+  } catch (_) {
+    // Service completely unreachable — allow the submission.
+    return null;
+  }
+
+  if (quota.allowed) return null;
+
+  // Transient service failure (errorCode set) — allow submission, log the issue.
+  if (quota.errorCode) {
+    log('Quota service unavailable, proceeding with submission.', 'info');
+    return null;
+  }
+
+  // Genuine monthly exhaustion — block.
+  return { status: 'limit_reached', quota };
+}
+
+/**
+ * Process the Easy Apply multi-step modal form.
+ * @param {string} attemptId - Stable key reused if final submission is retried
+ * @returns {Promise<boolean|{status: 'quota_unavailable'|'limit_reached'|'submission_unconfirmed', quota?: object, attemptId?: string}>}
+ * Whether submission was confirmed, or a structured denial/uncertain outcome.
+ */
+async function processEasyApplyModal(modal, title, company, config, attemptId) {
   let attempts = 0;
   const maxAttempts = 15;
+  let lastStepSignature = null;
+  let stuckWithRequiredFields = 0;
 
   while (attempts < maxAttempts) {
     attempts++;
+    const manualInterventionReason = detectLinkedInManualIntervention(modal || document);
+    if (manualInterventionReason) {
+      return { status: 'manual_intervention', reason: manualInterventionReason, attemptId };
+    }
 
     // Re-find modal in case DOM changed
     modal = document.querySelector(SELECTORS.easyApplyModal.join(', '));
@@ -187,8 +389,24 @@ async function processEasyApplyModal(modal, title, company, config) {
     }
 
     // Answer questions on current page
-    await answerFormQuestions(modal, config);
-    await sleep(800);
+    const formResult = await answerFormQuestions(modal, config);
+    await sleep(400);
+
+    // Detect a form that will not advance because required fields we cannot
+    // safely answer remain. If the step content stops changing across attempts
+    // while required fields are still unanswered, discard and skip this job so
+    // the bot continues with the next one instead of stalling.
+    const stepSignature = getModalStepSignature(modal);
+    if (formResult?.needsUserInput?.length && stepSignature === lastStepSignature) {
+      stuckWithRequiredFields++;
+      if (stuckWithRequiredFields >= 2) {
+        log(`Skipping "${title}": required questions could not be auto-answered.`, 'info');
+        return { status: 'needs_user_input', fields: formResult.needsUserInput, attemptId };
+      }
+    } else {
+      stuckWithRequiredFields = 0;
+    }
+    lastStepSignature = stepSignature;
 
     // Look for footer buttons
     const footerBtns = modal.querySelectorAll('footer button, div[class*="footer"] button, button[data-easy-apply-next-button]');
@@ -198,17 +416,22 @@ async function processEasyApplyModal(modal, title, company, config) {
                       findButtonByText(modal, 'Submit') ||
                       modal.querySelector('button[aria-label*="Submit application"]');
     if (submitBtn) {
-      if (config.pauseBeforeSubmit) {
+      if (await shouldPauseBeforeSubmit(config)) {
         const userConfirmed = await showConfirmDialog(
-          `Submit application for "${title}" at ${company}?`
+          `Review and submit application for "${title}" at ${company}?`
         );
-        if (!userConfirmed) return false;
+        if (!userConfirmed) return { status: 'review_required', attemptId };
       }
-      handleFollowCompany(modal, config);
-      submitBtn.click();
-      await sleep(2000);
 
-      // Dismiss any post-submit popups (e.g., "Add resume to profile", promotions)
+      handleFollowCompany(modal, config);
+      const quotaDenial = await consumeApplicationQuotaForSubmit(attemptId);
+      if (quotaDenial) return quotaDenial;
+
+      submitBtn.click();
+      if (!(await waitForLinkedInSubmissionConfirmation())) {
+        return { status: 'submission_unconfirmed', attemptId };
+      }
+
       await dismissPostSubmitPopups();
 
       const doneBtn = findButtonByText(document, 'Done');
@@ -222,23 +445,28 @@ async function processEasyApplyModal(modal, title, company, config) {
                       modal.querySelector('button[aria-label*="Review"]');
     if (reviewBtn) {
       reviewBtn.click();
-      await sleep(1500);
+      await sleep(800);
 
       const submitAfterReview = findButtonByText(modal, 'Submit application') ||
                                 findButtonByText(document, 'Submit application') ||
                                 document.querySelector('button[aria-label*="Submit application"]');
       if (submitAfterReview) {
-        if (config.pauseBeforeSubmit) {
+        if (await shouldPauseBeforeSubmit(config)) {
           const userConfirmed = await showConfirmDialog(
-            `Submit application for "${title}" at ${company}?`
+            `Review and submit application for "${title}" at ${company}?`
           );
-          if (!userConfirmed) return false;
+          if (!userConfirmed) return { status: 'review_required', attemptId };
         }
-        handleFollowCompany(modal, config);
-        submitAfterReview.click();
-        await sleep(2000);
 
-        // Dismiss any post-submit popups (e.g., "Add resume to profile", promotions)
+        handleFollowCompany(modal, config);
+        const quotaDenial = await consumeApplicationQuotaForSubmit(attemptId);
+        if (quotaDenial) return quotaDenial;
+
+        submitAfterReview.click();
+        if (!(await waitForLinkedInSubmissionConfirmation())) {
+          return { status: 'submission_unconfirmed', attemptId };
+        }
+
         await dismissPostSubmitPopups();
 
         const doneBtn = findButtonByText(document, 'Done');
@@ -254,7 +482,7 @@ async function processEasyApplyModal(modal, title, company, config) {
                     modal.querySelector('button[aria-label*="next" i], button[data-easy-apply-next-button]');
     if (nextBtn) {
       nextBtn.click();
-      await sleep(1200);
+      await sleep(700);
       continue;
     }
 
@@ -262,7 +490,7 @@ async function processEasyApplyModal(modal, title, company, config) {
     const continueBtn = findButtonByText(modal, 'Continue');
     if (continueBtn) {
       continueBtn.click();
-      await sleep(1200);
+      await sleep(700);
       continue;
     }
 
@@ -273,7 +501,7 @@ async function processEasyApplyModal(modal, title, company, config) {
       );
       if (primaryBtn) {
         primaryBtn.click();
-        await sleep(1200);
+        await sleep(700);
         continue;
       }
     }
@@ -296,33 +524,51 @@ async function processEasyApplyModal(modal, title, company, config) {
 }
 
 /**
- * Dismiss LinkedIn post-submit popups like "Add resume to profile",
- * "Share that you got a new job", or other promotional modals.
- * Clicks "Not now", "Later", "Dismiss", "Skip", or the X button.
+ * Wait for LinkedIn to explicitly confirm the irreversible submission. Matches
+ * the success popup text such as "Your application was sent to ..." or
+ * "Application submitted", including the "was sent/was submitted" variants.
+ */
+async function waitForLinkedInSubmissionConfirmation(timeoutMs = 5000) {
+  const confirmationPattern =
+    /application\s+(?:was\s+)?(?:sent|submitted)|your application was sent/i;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const modalText = [...document.querySelectorAll('[role="dialog"], .artdeco-modal')]
+      .map(element => element.textContent || '')
+      .join(' ');
+    if (confirmationPattern.test(modalText)) return true;
+    await sleep(250);
+  }
+  return false;
+}
+
+/**
+ * Dismiss LinkedIn post-submit popups like "Update profile", "Add resume to
+ * profile", "Share that you got a new job", or other promotional modals.
+ * Tries dismiss/skip/close buttons, then falls back to pressing Escape.
  */
 async function dismissPostSubmitPopups() {
-  // Wait a moment for popup to appear
-  await sleep(1500);
+  await sleep(500);
 
-  // Try up to 3 times (multiple popups can stack)
-  for (let i = 0; i < 3; i++) {
+  for (let round = 0; round < 5; round++) {
     let dismissed = false;
 
-    // Look for dismiss/skip/later buttons
-    const dismissTexts = ['not now', 'later', 'dismiss', 'skip', 'no thanks', 'maybe later'];
-    const allButtons = document.querySelectorAll('button, a[role="button"]');
-
-    for (const btn of allButtons) {
+    // 1. Look for explicit dismiss/skip/later buttons.
+    const dismissTexts = [
+      'not now', 'later', 'dismiss', 'skip', 'no thanks', 'maybe later',
+      'done', 'got it', 'continue browsing',
+    ];
+    for (const btn of document.querySelectorAll('button, a[role="button"]')) {
       const text = btn.textContent.trim().toLowerCase();
       if (dismissTexts.some(d => text === d || text.includes(d))) {
         btn.click();
         dismissed = true;
-        await sleep(1000);
+        await sleep(500);
         break;
       }
     }
 
-    // Also look for close/X buttons on modals
+    // 2. Close any remaining modal with the X / dismiss button.
     if (!dismissed) {
       const closeSelectors = [
         'button[aria-label="Dismiss"]',
@@ -330,19 +576,25 @@ async function dismissPostSubmitPopups() {
         'button[aria-label*="close" i]',
         '.artdeco-modal__dismiss',
         'button[data-test-modal-close-btn]',
+        '.artdeco-modal button[type="button"] li-icon[type="cancel"]',
       ];
       for (const sel of closeSelectors) {
         const closeBtn = document.querySelector(sel);
         if (closeBtn && closeBtn.offsetParent !== null) {
           closeBtn.click();
           dismissed = true;
-          await sleep(1000);
+          await sleep(500);
           break;
         }
       }
     }
 
-    if (!dismissed) break; // No more popups to dismiss
+    // 3. If nothing was found, press Escape as a last resort.
+    if (!dismissed) {
+      pressEscape();
+      await sleep(300);
+      break;
+    }
   }
 }
 
@@ -454,24 +706,19 @@ async function discardApplication() {
  * Uses stricter patterns to avoid matching years like "2020" or unrelated numbers.
  */
 function extractExperience(text) {
-  // Match patterns like "3+ years", "3-5 years", "3 to 5 years", "(3) years"
-  // Exclude 4-digit numbers (years like 2020) and numbers > 20
-  const patterns = [
-    /\b(\d{1,2})\s*\+?\s*years?\s+(?:of\s+)?(?:experience|exp)/gi,
-    /\b(\d{1,2})\s*[-–to]+\s*\d{1,2}\s*\+?\s*years?\s+(?:of\s+)?(?:experience|exp)/gi,
-    /(?:at least|minimum|min)\s*(\d{1,2})\s*\+?\s*years?/gi,
-    /(\d{1,2})\s*\+?\s*years?\s+(?:of\s+)?(?:relevant|professional|hands-on|industry)/gi,
-  ];
-
+  // Capture common forms such as "3 years", "5+ years", "3-5 years",
+  // "3 to 5 years", and "(3) years". A non-digit boundary prevents a
+  // four-digit calendar year from being partially matched.
+  const yearsPattern =
+    /(?:^|[^\d])\(?(\d{1,2})\)?\s*(?:\+|[-–]\s*\d{1,2}|to\s+\d{1,2})?\s*years?\b/gi;
   const numbers = [];
-  for (const pattern of patterns) {
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
-      const num = parseInt(match[1]);
-      // Filter out unreasonable values (> 15 years is likely a false positive)
-      if (num > 0 && num <= 15) {
-        numbers.push(num);
-      }
+  let match;
+
+  while ((match = yearsPattern.exec(text)) !== null) {
+    const years = Number.parseInt(match[1], 10);
+    // Values above 15 are more likely company age or unrelated chronology.
+    if (years > 0 && years <= 15) {
+      numbers.push(years);
     }
   }
 

@@ -1,12 +1,16 @@
 {
   "name": "linkedin-auto-job-applier",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "LinkedIn Auto Job Applier Chrome Extension",
   "private": true,
   "scripts": {
     "test": "jest --coverage",
     "test:watch": "jest --watch",
-    "test:verbose": "jest --verbose --coverage"
+    "test:verbose": "jest --verbose --coverage",
+    "lint": "node scripts/static-check.js",
+    "validate:extension": "node scripts/validate-extension.js",
+    "build": "node scripts/build-extension.js",
+    "package": "node scripts/build-extension.js"
   },
   "devDependencies": {
     "@jest/globals": "29.7.0",
@@ -15,6 +19,6 @@
     "jest-environment-jsdom": "29.7.0"
   },
   "dependencies": {
-    "firebase-admin": "^13.10.0"
+    "firebase-admin": "13.10.0"
   }
 }

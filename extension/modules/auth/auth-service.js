@@ -137,6 +137,19 @@ async function signInWithGoogle() {
  */
 async function signOutUser() {
   try {
+    const uid = auth.currentUser?.uid || null;
+    if (typeof removeLegacyLinkedInCredentials === 'function') {
+      await removeLegacyLinkedInCredentials(uid);
+    } else {
+      await new Promise(resolve => chrome.storage.local.remove([
+        'linkedinEmail',
+        'linkedinPassword',
+        'credentialsObfuscated',
+        'credentialOwnerUid',
+        'pendingAutoLogin',
+      ], resolve));
+    }
+
     await auth.signOut();
     // Invalidate all cached user data
     if (typeof invalidateAllCache === 'function') {
@@ -144,6 +157,8 @@ async function signOutUser() {
     }
     // Clear session/auth/role data from chrome.storage.local
     const keysToRemove = [
+      'linkedinEmail', 'linkedinPassword', 'credentialsObfuscated',
+      'credentialOwnerUid',
       'userPlan', 'planExpiresAt', 'planCachedAt', 'userRole',
       'cachedUserEmail', 'cachedUserId',
       'botRunning', 'hrBotRunning', 'botState', 'hrBotState',

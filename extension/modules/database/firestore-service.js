@@ -156,26 +156,6 @@ async function saveBotSettings(uid, settings) {
 }
 
 /**
- * Save LinkedIn credentials (obfuscated) to Firestore.
- * @param {string} uid
- * @param {object} creds - { email: obfuscated, password: obfuscated }
- * @returns {Promise<boolean>}
- */
-async function saveLinkedinCredentials(uid, creds) {
-  try {
-    await db.collection('users').doc(uid).update({
-      linkedinCredentials: creds,
-      updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-    });
-    await invalidateCache('fullProfile');
-    return true;
-  } catch (err) {
-    console.error('[Firestore Service] Failed to save LinkedIn credentials:', err.message);
-    return false;
-  }
-}
-
-/**
  * Append an entry to application history (capped at 500).
  * @param {string} uid
  * @param {object} entry - { jobId, title, company, jobLink, date, status }
@@ -242,64 +222,9 @@ async function getUserPlanFromFirestore(uid) {
 }
 
 /**
- * Update daily usage count in Firestore.
- * @param {string} uid
- * @param {string} field - 'applications' or 'hrMessages'
- * @returns {Promise<number>} New count
- */
-async function incrementUsageInFirestore(uid, field) {
-  const today = new Date().toISOString().split('T')[0];
-  const usageKey = `usage.${today}.${field}`;
-
-  try {
-    await db.collection('users').doc(uid).update({
-      [usageKey]: firebase.firestore.FieldValue.increment(1),
-    });
-
-    // Read back the current value
-    const doc = await db.collection('users').doc(uid).get();
-    const usage = doc.data()?.usage?.[today] || {};
-    return usage[field] || 1;
-  } catch (err) {
-    console.warn('[Firestore Service] Failed to increment usage:', err.message);
-    return 0;
-  }
-}
-
-/**
- * Get today's usage from Firestore (with brief cache).
- * @param {string} uid
- * @returns {Promise<{applications: number, hrMessages: number}>}
- */
-async function getTodayUsageFromFirestore(uid) {
-  const today = new Date().toISOString().split('T')[0];
-
-  // Brief cache (1 minute) to avoid hammering Firestore during bot runs
-  const cached = await getCached('usage_today');
-  if (cached && cached._date === today) {
-    return cached;
-  }
-
-  try {
-    const doc = await db.collection('users').doc(uid).get();
-    if (!doc.exists) return { applications: 0, hrMessages: 0 };
-
-    const usage = doc.data()?.usage?.[today] || { applications: 0, hrMessages: 0 };
-    await setCache('usage_today', { ...usage, _date: today });
-    return usage;
-  } catch (err) {
-    return { applications: 0, hrMessages: 0 };
-  }
-}
-
-/**
- * Admin emails — users with these emails get admin role + pro plan on signup.
- */
-// eslint-disable-next-line no-var
-var ADMIN_EMAILS = ['mukul798348@gmail.com'];
-
-/**
- * Create initial user document on signup.
+ * Create an unprivileged initial user document on signup.
+ * Admin/custom-claim assignment belongs exclusively to trusted Cloud Functions;
+ * extension code is user-controlled and must never grant itself privileges.
  * @param {string} uid
  * @param {string} email
  * @param {string} displayName
@@ -307,15 +232,13 @@ var ADMIN_EMAILS = ['mukul798348@gmail.com'];
  * @returns {Promise<boolean>}
  */
 async function createUserDocument(uid, email, displayName, userId) {
-  const isAdmin = ADMIN_EMAILS.includes(email?.toLowerCase());
-
   try {
     await db.collection('users').doc(uid).set({
       userId: userId,
       email: email,
       displayName: displayName,
-      role: isAdmin ? 'admin' : 'user',
-      plan: isAdmin ? 'pro' : 'free',
+      role: 'user',
+      plan: 'free',
       planExpiresAt: null,
       createdAt: firebase.firestore.FieldValue.serverTimestamp(),
       updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
@@ -324,19 +247,10 @@ async function createUserDocument(uid, email, displayName, userId) {
       skillMap: {},
       templates: {},
       botSettings: {},
-      linkedinCredentials: null,
       applicationHistory: [],
       usage: {},
       onboardingComplete: false,
     });
-
-    // Cache role locally
-    if (isAdmin) {
-      await new Promise(resolve => {
-        chrome.storage.local.set({ userRole: 'admin', userPlan: 'pro' }, resolve);
-      });
-      console.log('[JobPilot] Admin user created:', email);
-    }
 
     return true;
   } catch (err) {

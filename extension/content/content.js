@@ -40,36 +40,49 @@
 
   // ===== MESSAGE LISTENERS =====
   // Listen for messages from background/popup
-  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    const validation = MessageProtocol.validate(message);
+    if (!MessageProtocol.validateSender(sender) || !validation.valid) {
+      sendResponse({ ok: false, error: validation.error || 'INVALID_SENDER' });
+      return false;
+    }
     try {
-      if (msg.action === 'startBot') {
-        startBot(state);
-      } else if (msg.action === 'stopBot') {
-        stopBot(state);
-      } else if (msg.action === 'startHRBot') {
-        startHROutreach(state);
-      } else if (msg.action === 'stopHRBot') {
+      if (message.type === MessageType.CONTENT_START_BOT) startBot(state);
+      else if (message.type === MessageType.CONTENT_STOP_BOT) stopBot(state);
+      else if (message.type === MessageType.CONTENT_START_HR) startHROutreach(state);
+      else if (message.type === MessageType.CONTENT_STOP_HR) {
         state.hrStopRequested = true;
         log('HR outreach stop requested.', 'info');
+      } else {
+        sendResponse({ ok: false, error: 'MESSAGE_NOT_ALLOWED_IN_CONTENT' });
+        return false;
       }
-    } catch (e) {
-      console.error('[LinkedIn Auto Applier] Error handling message:', e);
+    } catch (error) {
+      ExtensionLogger.error('Content message handling failed.', { code: error?.code });
+      sendResponse({ ok: false, error: 'MESSAGE_FAILED' });
+      return false;
     }
-    sendResponse({ received: true });
-    return true;
+    sendResponse({ ok: true });
+    return false;
   });
 
   // ===== AUTO-RESUME ON PAGE LOAD =====
   // Only auto-resume the job application bot (not HR outreach) after navigation.
   // HR outreach should NOT auto-resume on manual page reload — only on
   // programmatic navigation (when the bot itself navigates to the search page).
+  chrome.storage.local.remove([
+    'linkedinEmail',
+    'linkedinPassword',
+    'credentialsObfuscated',
+    'credentialOwnerUid',
+    'pendingAutoLogin',
+  ]);
+
   chrome.storage.local.get(
-    ['botRunning', 'pendingAutoLogin', 'botState', 'hrBotRunning', 'hrBotState'],
+    ['botRunning', 'botState', 'hrBotRunning', 'hrBotState', 'hrBotStateTimestamp'],
     (data) => {
       try {
-        if (data.pendingAutoLogin && window.location.href.includes('linkedin.com/login')) {
-          handleAutoLogin(state);
-        } else if (data.hrBotRunning && data.hrBotState === 'searching' && window.location.href.includes('search/results/people')) {
+        if (data.hrBotRunning && data.hrBotState === 'searching' && window.location.href.includes('search/results/people')) {
           // Only resume HR outreach if the bot itself triggered the navigation
           // (hrBotState === 'searching' means the bot navigated here, not the user)
           // Check if this is a fresh page load vs. bot-triggered navigation
@@ -88,7 +101,7 @@
             log('Page reloaded by user or stale state. Stopping HR outreach.', 'info');
             chrome.storage.local.set({ hrBotRunning: false, hrBotState: null, hrBotStateTimestamp: null });
           }
-        } else if (data.botRunning && !data.pendingAutoLogin) {
+        } else if (data.botRunning) {
           // Job application bot: check if this is a bot-triggered navigation
           const navType = performance.getEntriesByType('navigation')[0]?.type;
           if (navType === 'navigate') {
@@ -112,61 +125,6 @@
       }
     }
   );
-
-  // ===== AUTO-LOGIN HANDLER =====
-  async function handleAutoLogin(state) {
-    const data = await getStorage(['linkedinEmail', 'linkedinPassword', 'loginMode', 'credentialsObfuscated']);
-    if (data.loginMode === 'manual' || !data.linkedinEmail || !data.linkedinPassword) {
-      log('Manual login mode or no credentials. Please log in manually.', 'warning');
-      chrome.storage.local.set({ pendingAutoLogin: false });
-      return;
-    }
-
-    // Decode obfuscated credentials
-    let email = data.linkedinEmail;
-    let password = data.linkedinPassword;
-    if (data.credentialsObfuscated) {
-      try {
-        email = decodeURIComponent(atob(email));
-        password = decodeURIComponent(atob(password));
-      } catch (e) {
-        log('Failed to decode credentials. Please re-enter them.', 'error');
-        chrome.storage.local.set({ pendingAutoLogin: false });
-        return;
-      }
-    }
-
-    log('Attempting auto-login...', 'info');
-    await sleep(1500);
-
-    const emailField = document.getElementById('username');
-    const passField = document.getElementById('password');
-    const submitBtn = document.querySelector('button[type="submit"]');
-
-    if (emailField && passField && submitBtn) {
-      setNativeValue(emailField, email);
-      setNativeValue(passField, password);
-      await sleep(500);
-      submitBtn.click();
-
-      chrome.storage.local.set({ pendingAutoLogin: false });
-
-      // Wait for redirect to feed, then start bot
-      const checkLogin = setInterval(() => {
-        if (window.location.href.includes('/feed') || window.location.href.includes('/jobs')) {
-          clearInterval(checkLogin);
-          log('Login successful!', 'success');
-          setTimeout(() => startBot(state), 2000);
-        }
-      }, 1000);
-
-      // Timeout after 30s
-      setTimeout(() => clearInterval(checkLogin), 30000);
-    } else {
-      log('Login fields not found. Please log in manually.', 'warning');
-      chrome.storage.local.set({ pendingAutoLogin: false });
-    }
-  }
 
   console.log('[LinkedIn Auto Applier] Content script loaded successfully.');
 

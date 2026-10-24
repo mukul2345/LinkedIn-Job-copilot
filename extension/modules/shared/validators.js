@@ -4,8 +4,9 @@
 /**
  * Valid job board identifiers supported by the scraping service.
  */
+// Boards supported by the deployed python-jobspy scraper.
 // eslint-disable-next-line no-var
-var VALID_BOARDS = ['linkedin', 'indeed', 'glassdoor', 'naukri', 'uplers', 'adzuna'];
+var VALID_BOARDS = ['linkedin', 'indeed', 'glassdoor'];
 
 /**
  * Maximum resume file size in bytes (5 MB).

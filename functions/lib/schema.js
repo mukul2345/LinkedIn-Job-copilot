@@ -14,23 +14,46 @@
 
 /**
  * @typedef {Object} JobDocument
- * @property {string} id - Deterministic hash: sha256(title+company+location)
+ * @property {string} id - Deterministic identity derived from platform job ID or canonical URL
+ * @property {1} schemaVersion - Canonical job schema version
+ * @property {'linkedin'|'indeed'|'glassdoor'} platform - Supported source platform
+ * @property {string|null} platformJobId - Platform-owned posting ID when available
  * @property {string} title - Job title
- * @property {string} company - Company name
- * @property {string} location - Job location
- * @property {string} description - Full job description text
- * @property {string|null} salary - Salary info if available, null otherwise
- * @property {string} url - Original job listing URL
- * @property {'linkedin'|'indeed'|'glassdoor'|'naukri'|'uplers'|'adzuna'} sourceBoard - Source job board
- * @property {FirebaseFirestore.Timestamp|null} postedDate - When the job was posted, null if unknown
- * @property {number|null} fitScore - AI-computed fit score 0-100, null if not yet computed
- * @property {string|null} fitExplanation - Brief explanation of fit score factors
- * @property {string[]} fitExcludedDimensions - Profile dimensions excluded from scoring (e.g. missing data)
- * @property {'available'|'unlikely'|'unknown'|null} sponsorship - Visa sponsorship classification
- * @property {'full'|'reduced'} sponsorshipConfidence - Whether AI or keyword-only was used
- * @property {string} searchId - ID of the search that produced this record
- * @property {FirebaseFirestore.Timestamp} retrievedAt - When this record was fetched
- * @property {string[]} deduplicatedFrom - Source URLs merged into this record during dedup
+ * @property {string|null} company - Company name when supplied by the board
+ * @property {string|null} location - Job location when supplied by the board
+ * @property {string|null} description - Full job description text
+ * @property {{minimum:number,maximum:number,currency:string|null,text:string}|null} salary - Parsed salary range
+ * @property {string} url - Valid canonical HTTPS listing URL
+ * @property {string} canonicalUrl - URL used for deterministic identity and deduplication
+ * @property {string|null} employmentType - Board-provided employment type
+ * @property {string|null} remoteType - Board-provided remote/on-site type
+ * @property {string[]} requiredSkills - Explicitly extracted required skills
+ * @property {string[]} preferredSkills - Explicitly extracted preferred skills
+ * @property {Object} metadata - Non-canonical source details, including original salary text
+ * @property {string} sourceBoard - Backward-compatible alias of platform
+ * @property {string|null} postedAt - ISO posting timestamp
+ * @property {string|null} postedDate - Backward-compatible alias of postedAt
+ * @property {{platform:string,url:string}[]} sourceListings - High-confidence duplicate sources only
+ * @property {{score:number,recommendation:string,matchedSkills:string[],missingSkills:string[],reasons:string[]}|null} match - Validated AI match result
+ * @property {'DIRECT_APPLY'|'EXTERNAL_APPLY'|'UNSUPPORTED'|'REQUIRES_USER'} applicationCapability - Truthful application routing capability
+ */
+
+// ============================================================
+// Extension-local application lifecycle (chrome.storage.local)
+// Key: applicationStatesV1[jobId]
+// ============================================================
+
+/**
+ * @typedef {Object} ApplicationStateRecord
+ * @property {1} version
+ * @property {string} jobId
+ * @property {'linkedin'|'indeed'|'glassdoor'} platform
+ * @property {'DISCOVERED'|'ANALYZING'|'MATCHED'|'SKIPPED'|'READY'|'APPLYING'|'NEEDS_USER_INPUT'|'EXTERNAL_APPLICATION'|'SUBMITTED'|'FAILED'} state
+ * @property {string|null} attemptId - Stable application attempt/idempotency key
+ * @property {string|null} receiptId - Provider receipt required for confirmed submission
+ * @property {boolean} confirmed - Whether the provider explicitly confirmed submission
+ * @property {string[]} reasonCodes
+ * @property {string} updatedAt - ISO timestamp
  */
 
 // ============================================================
@@ -111,22 +134,27 @@
 const SCHEMA_DEFAULTS = {
   job: {
     id: '',
+    schemaVersion: 1,
+    platform: '',
+    platformJobId: null,
     title: '',
-    company: '',
-    location: '',
-    description: '',
+    company: null,
+    location: null,
+    description: null,
     salary: null,
     url: '',
+    canonicalUrl: '',
+    employmentType: null,
+    remoteType: null,
+    requiredSkills: [],
+    preferredSkills: [],
+    metadata: {},
     sourceBoard: '',
+    postedAt: null,
     postedDate: null,
-    fitScore: null,
-    fitExplanation: null,
-    fitExcludedDimensions: [],
-    sponsorship: null,
-    sponsorshipConfidence: 'full',
-    searchId: '',
-    retrievedAt: null,
-    deduplicatedFrom: [],
+    sourceListings: [],
+    match: null,
+    applicationCapability: 'UNSUPPORTED',
   },
 
   resume: {
@@ -181,6 +209,8 @@ const COLLECTION_PATHS = {
   userTracker: (userId) => `users/${userId}/tracker`,
   userTokens: (userId) => `users/${userId}/tokens`,
   userProfile: (userId) => `users/${userId}/settings/profile`,
+  userSearchSessions: (userId) => `users/${userId}/searchSessions`,
+  userApplications: (userId) => `users/${userId}/applications`,
 };
 
 module.exports = {

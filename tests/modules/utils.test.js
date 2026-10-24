@@ -257,15 +257,15 @@ describe('findButtonByText()', () => {
 
 // ===== log() =====
 describe('log()', () => {
-  it('should send a message via chrome.runtime.sendMessage', () => {
-    const consoleSpy = jest.spyOn(console, 'log').mockImplementation();
+  it('should send a structured message via chrome.runtime.sendMessage', () => {
+    const consoleSpy = jest.spyOn(console, 'info').mockImplementation();
     chrome.runtime.sendMessage.mockReturnValue(Promise.resolve());
 
     log('Test message', 'info');
 
-    expect(consoleSpy).toHaveBeenCalledWith('[LinkedIn Auto Applier] Test message');
+    expect(consoleSpy).toHaveBeenCalledWith('[JobPilot] Bot event.', { level: 'info' });
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'log',
+      type: 'LOG',
       message: 'Test message',
       level: 'info'
     });
@@ -307,7 +307,7 @@ describe('sendStatus()', () => {
     sendStatus(5, 3, 1);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
-      type: 'status',
+      type: 'STATUS',
       applied: 5,
       skipped: 3,
       failed: 1

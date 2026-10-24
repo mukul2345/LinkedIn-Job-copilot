@@ -8,6 +8,7 @@ beforeAll(() => {
     'plan-config.js',
     'usage-repository.js',
     'plan-service.js',
+    'upgrade-modal.js',
     'utils.js',
     'selectors.js',
     'form-filler.js',
@@ -187,7 +188,7 @@ describe('stopBot()', () => {
     stopBot(state);
 
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'stopped' })
+      expect.objectContaining({ type: 'STOPPED' })
     );
   });
 
@@ -360,5 +361,52 @@ describe('goToJobNextPage()', () => {
     document.body.innerHTML = '<div>No pagination</div>';
     const result = await goToJobNextPage(2);
     expect(result).toBe(false);
+  });
+});
+
+
+describe('presentApplicationQuotaDenial()', () => {
+  it('should show a service alert instead of upgrade UI when quota verification fails', () => {
+    const safetyAlert = jest.spyOn(global, 'showSafetyAlert').mockImplementation();
+    const upgradeModal = jest.spyOn(global, 'showUpgradeModal').mockImplementation();
+
+    const wasHandled = presentApplicationQuotaDenial({
+      status: 'quota_unavailable',
+      quota: { errorCode: 'QUOTA_UNAVAILABLE' },
+    });
+
+    expect(wasHandled).toBe(true);
+    expect(safetyAlert).toHaveBeenCalledWith(
+      expect.stringContaining('Unable to verify your application quota'),
+      'danger'
+    );
+    expect(upgradeModal).not.toHaveBeenCalled();
+  });
+
+  it('should show upgrade UI only for genuine quota exhaustion', () => {
+    const safetyAlert = jest.spyOn(global, 'showSafetyAlert').mockImplementation();
+    const upgradeModal = jest.spyOn(global, 'showUpgradeModal').mockImplementation();
+
+    const wasHandled = presentApplicationQuotaDenial({
+      status: 'limit_reached',
+      quota: { used: 10, limit: 10, plan: 'free' },
+    });
+
+    expect(wasHandled).toBe(true);
+    expect(upgradeModal).toHaveBeenCalledWith(
+      expect.stringContaining('10/10'),
+      10,
+      10
+    );
+    expect(safetyAlert).not.toHaveBeenCalled();
+  });
+
+  it('should ignore non-quota job results', () => {
+    const safetyAlert = jest.spyOn(global, 'showSafetyAlert').mockImplementation();
+    const upgradeModal = jest.spyOn(global, 'showUpgradeModal').mockImplementation();
+
+    expect(presentApplicationQuotaDenial('applied')).toBe(false);
+    expect(safetyAlert).not.toHaveBeenCalled();
+    expect(upgradeModal).not.toHaveBeenCalled();
   });
 });

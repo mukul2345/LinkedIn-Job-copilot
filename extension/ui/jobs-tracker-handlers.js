@@ -10,7 +10,19 @@
   var _filteredResults = []; // results after filter/sort applied
   var _currentPage = 1;
   var _totalPages = 1;
-  var _scanInterval = null;
+  var _serverTotal = 0;
+  var _usesServerPagination = false;
+  var _failedBoards = [];
+  var _currentSearchSessionId = null;
+
+  var JOB_URL_ALLOWED_HOSTS = [
+    'linkedin.com', 'naukri.com', 'indeed.com', 'glassdoor.com', 'workday.com', 'angel.co',
+    'wellfound.com', 'lever.co', 'greenhouse.io', 'smartrecruiters.com', 'ziprecruiter.com',
+  ];
+  var RESUME_URL_ALLOWED_HOSTS = [
+    'storage.googleapis.com', 'firebasestorage.googleapis.com', 'googleusercontent.com',
+    'us-central1-linkedin-jobcopilot.cloudfunctions.net',
+  ];
 
   // ===== INITIALIZATION =====
   document.addEventListener('DOMContentLoaded', function () {
@@ -39,7 +51,10 @@
     }
     if (prevBtn) {
       prevBtn.addEventListener('click', function () {
-        if (_currentPage > 1) {
+        if (_currentPage <= 1) return;
+        if (_usesServerPagination) {
+          handleSearch(_currentPage - 1);
+        } else {
           _currentPage--;
           renderCurrentPage();
         }
@@ -47,7 +62,10 @@
     }
     if (nextBtn) {
       nextBtn.addEventListener('click', function () {
-        if (_currentPage < _totalPages) {
+        if (_currentPage >= _totalPages) return;
+        if (_usesServerPagination) {
+          handleSearch(_currentPage + 1);
+        } else {
           _currentPage++;
           renderCurrentPage();
         }
@@ -80,35 +98,50 @@
   }
 
   // ===== SEARCH HANDLER =====
-  function handleSearch() {
+  async function handleSearch(requestedPage) {
+    var page = Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
     var query = (document.getElementById('jobSearchQuery').value || '').trim();
     var boards = getSelectedBoards();
+    var jobType = (document.getElementById('filterJobType') || {}).value || undefined;
+    var datePosted = (document.getElementById('filterDatePosted') || {}).value || undefined;
 
-    // Show loading state
+    // Render feedback before reading preferences so the popup responds immediately.
     var resultsContainer = document.getElementById('jobResults');
     if (resultsContainer) {
-      resultsContainer.innerHTML = '<p class="job-results-loading">🔍 Searching across job boards...</p>';
+      replaceWithTextState(resultsContainer, 'p', 'job-results-loading', '🔍 Searching across job boards...');
     }
 
-    searchJobs({ query: query, boards: boards })
-      .then(function (result) {
-        _currentResults = result.jobs || [];
-        _currentPage = 1;
+    var savedPreferences = typeof getSearchPreferences === 'function'
+      ? await getSearchPreferences()
+      : {};
+    var location = typeof savedPreferences.location === 'string'
+      ? savedPreferences.location.trim()
+      : '';
 
-        // Show failed boards warning if any
-        if (result.failedBoards && result.failedBoards.length > 0) {
-          showFailedBoardsWarning(result.failedBoards);
-        }
-
+    searchJobs({
+      query: query,
+      boards: boards,
+      location: location || undefined,
+      jobType: jobType,
+      datePosted: datePosted,
+      page: page,
+      searchSessionId: page > 1 ? _currentSearchSessionId : undefined,
+    })
+      .then(function (searchResult) {
+        _currentResults = searchResult.jobs || [];
+        _failedBoards = Array.isArray(searchResult.failedBoards) ? searchResult.failedBoards : [];
+        _currentSearchSessionId = searchResult.searchSessionId || (page > 1 ? _currentSearchSessionId : null);
+        _usesServerPagination = Number.isInteger(searchResult.totalPages) && searchResult.totalPages > 0;
+        _serverTotal = Number.isFinite(searchResult.total) ? searchResult.total : _currentResults.length;
+        _currentPage = _usesServerPagination ? (searchResult.page || page) : 1;
+        _totalPages = _usesServerPagination ? searchResult.totalPages : 1;
         applyFiltersAndRender();
-
-        // Auto-fetch fit scores and visa status for visible jobs
-        enrichVisibleJobs();
       })
-      .catch(function (err) {
-        var errorMsg = (err && err.message) || 'Search failed. Please try again.';
+      .catch(function (error) {
+        _failedBoards = [];
+        var errorMessage = (error && error.message) || 'Search failed. Please try again.';
         if (resultsContainer) {
-          resultsContainer.innerHTML = '<p class="job-results-error">❌ ' + escapeHtml(errorMsg) + '</p>';
+          replaceWithTextState(resultsContainer, 'p', 'job-results-error', '❌ ' + errorMessage);
         }
       });
   }
@@ -158,7 +191,14 @@
 
   // ===== PAGINATION =====
   function renderCurrentPage() {
-    var paginated = paginateResults(_filteredResults, _currentPage);
+    var paginated = _usesServerPagination
+      ? {
+          jobs: _filteredResults,
+          page: _currentPage,
+          totalPages: _totalPages,
+          total: _serverTotal,
+        }
+      : paginateResults(_filteredResults, _currentPage);
     _currentPage = paginated.page;
     _totalPages = paginated.totalPages;
 
@@ -167,101 +207,105 @@
     var pageInfo = document.getElementById('jobPageInfo');
 
     if (resultsContainer) {
+      resultsContainer.replaceChildren();
       if (paginated.jobs.length === 0) {
-        resultsContainer.innerHTML = '<p class="job-results-empty">No jobs found matching your criteria.</p>';
+        resultsContainer.appendChild(createTextElement(
+          'p',
+          'job-results-empty',
+          'No jobs found matching your criteria.'
+        ));
       } else {
-        var html = '';
-        for (var i = 0; i < paginated.jobs.length; i++) {
-          html += renderJobCard(paginated.jobs[i]);
+        for (var index = 0; index < paginated.jobs.length; index++) {
+          resultsContainer.appendChild(renderJobCard(paginated.jobs[index]));
         }
-        resultsContainer.innerHTML = html;
         attachJobCardListeners();
       }
+      showFailedBoardsWarning(_failedBoards);
     }
 
-    // Update pagination UI
     if (paginationContainer) {
       paginationContainer.style.display = _totalPages > 1 ? 'flex' : 'none';
     }
-    if (pageInfo) {
-      pageInfo.textContent = 'Page ' + _currentPage + ' of ' + _totalPages;
-    }
+    if (pageInfo) pageInfo.textContent = 'Page ' + _currentPage + ' of ' + _totalPages;
 
     var prevBtn = document.getElementById('jobPrevPage');
     var nextBtn = document.getElementById('jobNextPage');
     if (prevBtn) prevBtn.disabled = _currentPage <= 1;
     if (nextBtn) nextBtn.disabled = _currentPage >= _totalPages;
+
+    enrichVisibleJobs();
   }
 
   // ===== JOB CARD RENDERING =====
   function renderJobCard(job) {
     var scoreDisplay = getScoreDisplayInfo(job.fitScore);
     var visaBadge = getSponsorshipBadge(job.sponsorship || 'unknown');
+    var card = document.createElement('div');
+    card.className = 'job-card';
+    card.dataset.jobId = String(job.id || '');
 
-    var escapedTitle = escapeHtml(job.title || 'Untitled');
-    var escapedCompany = escapeHtml(job.company || 'Unknown');
-    var escapedLocation = escapeHtml(job.location || '');
-    var escapedBoard = escapeHtml(job.sourceBoard || '');
-
-    var html = '<div class="job-card" data-job-id="' + escapeHtml(job.id) + '">';
-
-    // Title row with link
-    html += '  <div class="job-card-header">';
-    if (job.url) {
-      html += '    <a href="' + escapeHtml(job.url) + '" target="_blank" class="job-card-title">' + escapedTitle + '</a>';
+    var header = document.createElement('div');
+    header.className = 'job-card-header';
+    var jobUrl = getAllowedHttpsUrl(job.url, JOB_URL_ALLOWED_HOSTS);
+    if (jobUrl) {
+      var titleLink = createTextElement('a', 'job-card-title', job.title || 'Untitled');
+      titleLink.href = jobUrl;
+      titleLink.target = '_blank';
+      titleLink.rel = 'noopener noreferrer';
+      header.appendChild(titleLink);
     } else {
-      html += '    <span class="job-card-title">' + escapedTitle + '</span>';
+      header.appendChild(createTextElement('span', 'job-card-title', job.title || 'Untitled'));
     }
-    html += '  </div>';
+    card.appendChild(header);
 
-    // Company and location
-    html += '  <div class="job-card-meta">';
-    html += '    <span class="job-card-company">' + escapedCompany + '</span>';
-    if (escapedLocation) {
-      html += '    <span class="job-card-location">📍 ' + escapedLocation + '</span>';
+    var metadata = document.createElement('div');
+    metadata.className = 'job-card-meta';
+    metadata.appendChild(createTextElement('span', 'job-card-company', job.company || 'Unknown'));
+    if (job.location) {
+      metadata.appendChild(createTextElement('span', 'job-card-location', '📍 ' + job.location));
     }
-    html += '  </div>';
+    card.appendChild(metadata);
 
-    // Badges row
-    html += '  <div class="job-card-badges">';
+    var badges = document.createElement('div');
+    badges.className = 'job-card-badges';
+    badges.appendChild(createTextElement('span', 'badge badge-source', job.sourceBoard || ''));
 
-    // Source board badge
-    html += '    <span class="badge badge-source">' + escapedBoard + '</span>';
+    var scoreBadge = createTextElement(
+      'span',
+      'badge badge-score',
+      job.fitScore != null ? job.fitScore + '%' : '—'
+    );
+    scoreBadge.style.backgroundColor = scoreDisplay.color;
+    scoreBadge.style.color = '#fff';
+    scoreBadge.dataset.jobId = String(job.id || '');
+    badges.appendChild(scoreBadge);
 
-    // Fit score badge
-    html += '    <span class="badge badge-score" style="background-color: ' + scoreDisplay.color + '; color: #fff;" data-job-id="' + escapeHtml(job.id) + '">';
-    if (job.fitScore != null) {
-      html += '      ' + job.fitScore + '%';
-    } else {
-      html += '      —';
-    }
-    html += '    </span>';
+    var visaBadgeElement = createTextElement('span', 'badge', visaBadge.label);
+    visaBadgeElement.classList.add(visaBadge.cssClass);
+    visaBadgeElement.style.backgroundColor = visaBadge.color;
+    visaBadgeElement.style.color = '#fff';
+    badges.appendChild(visaBadgeElement);
+    card.appendChild(badges);
 
-    // Visa badge
-    html += '    <span class="badge ' + visaBadge.cssClass + '" style="background-color: ' + visaBadge.color + '; color: #fff;">';
-    html += '      ' + escapeHtml(visaBadge.label);
-    html += '    </span>';
-
-    html += '  </div>';
-
-    // Actions row
-    html += '  <div class="job-card-actions">';
-    html += '    <button class="btn btn-secondary btn-sm btn-tailor" data-job-id="' + escapeHtml(job.id) + '">✨ Tailor Resume</button>';
-    html += '  </div>';
-
-    html += '</div>';
-    return html;
+    var actions = document.createElement('div');
+    actions.className = 'job-card-actions';
+    var tailorButton = createTextElement('button', 'btn btn-secondary btn-sm btn-tailor', '✨ Tailor Resume');
+    tailorButton.type = 'button';
+    tailorButton.dataset.jobId = String(job.id || '');
+    actions.appendChild(tailorButton);
+    card.appendChild(actions);
+    return card;
   }
 
   // ===== JOB CARD EVENT LISTENERS =====
   function attachJobCardListeners() {
-    // Tailor buttons
-    var tailorBtns = document.querySelectorAll('.btn-tailor');
-    tailorBtns.forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        var jobId = btn.getAttribute('data-job-id');
-        handleTailorResume(jobId, btn);
-      });
+    var tailorButtons = document.querySelectorAll('.btn-tailor');
+    tailorButtons.forEach(function (button) {
+      function tailorClickHandler() {
+        button.removeEventListener('click', tailorClickHandler);
+        handleTailorResume(button.getAttribute('data-job-id'), button);
+      }
+      button.addEventListener('click', tailorClickHandler);
     });
   }
 
@@ -281,7 +325,7 @@
       uploadBaseResume(file)
         .then(function (result) {
           if (result.success) {
-            if (hint) hint.textContent = '✓ Resume uploaded: ' + escapeHtml(file.name);
+            if (hint) hint.textContent = '✓ Resume uploaded: ' + file.name;
           } else {
             if (hint) hint.textContent = '❌ ' + (result.error || 'Upload failed');
           }
@@ -294,53 +338,54 @@
     input.click();
   }
 
-  function handleTailorResume(jobId, btn) {
-    var originalText = btn.textContent;
-    btn.textContent = '⏳ Tailoring...';
-    btn.disabled = true;
+  function handleTailorResume(jobId, button) {
+    button.textContent = '⏳ Tailoring...';
+    button.disabled = true;
 
     tailorResumeForJob(jobId)
-      .then(function (result) {
-        // Replace button with download link
-        btn.textContent = '📥 Download';
-        btn.disabled = false;
-        btn.classList.remove('btn-tailor');
-        btn.classList.add('btn-download');
+      .then(function (tailoredResume) {
+        var pdfUrl = getAllowedHttpsUrl(tailoredResume && tailoredResume.pdfUrl, RESUME_URL_ALLOWED_HOSTS);
+        if (!pdfUrl) throw new Error('The tailored resume download URL is invalid.');
 
-        btn.removeEventListener('click', arguments.callee);
-        btn.addEventListener('click', function () {
-          if (result.pdfUrl) {
-            window.open(result.pdfUrl, '_blank');
-          }
+        button.textContent = '📥 Download';
+        button.disabled = false;
+        button.classList.remove('btn-tailor');
+        button.classList.add('btn-download');
+        button.addEventListener('click', function downloadClickHandler() {
+          var openedWindow = window.open(pdfUrl, '_blank', 'noopener,noreferrer');
+          if (openedWindow) openedWindow.opener = null;
         });
       })
-      .catch(function (err) {
-        btn.textContent = '❌ Retry';
-        btn.disabled = false;
-        // Allow retry on click
-        btn.addEventListener('click', function retryHandler() {
-          btn.removeEventListener('click', retryHandler);
-          handleTailorResume(jobId, btn);
+      .catch(function () {
+        button.textContent = '❌ Retry';
+        button.disabled = false;
+        button.addEventListener('click', function retryHandler() {
+          button.removeEventListener('click', retryHandler);
+          handleTailorResume(jobId, button);
         });
       });
   }
 
   // ===== ENRICHMENT (fit score + visa auto-fetch) =====
   function enrichVisibleJobs() {
-    var jobIds = _filteredResults
-      .slice(0, SEARCH_PAGE_SIZE)
+    var jobIds = (_usesServerPagination
+      ? _filteredResults
+      : _filteredResults.slice(
+          (_currentPage - 1) * SEARCH_PAGE_SIZE,
+          _currentPage * SEARCH_PAGE_SIZE
+        ))
       .map(function (job) { return job.id; })
       .filter(Boolean);
 
     if (jobIds.length === 0) return;
 
-    // Batch fetch fit scores
     if (typeof getBatchFitScores === 'function') {
       getBatchFitScores(jobIds).then(function (scores) {
         var updated = false;
-        for (var i = 0; i < _currentResults.length; i++) {
-          var job = _currentResults[i];
-          if (scores[job.id] && scores[job.id].score != null) {
+        for (var index = 0; index < _currentResults.length; index++) {
+          var job = _currentResults[index];
+          if (scores[job.id] && scores[job.id].score != null &&
+              job.fitScore !== scores[job.id].score) {
             job.fitScore = scores[job.id].score;
             job.fitExplanation = scores[job.id].explanation;
             updated = true;
@@ -350,13 +395,13 @@
       }).catch(function () { /* Fit scores unavailable — silent fail */ });
     }
 
-    // Batch fetch visa/sponsorship status
     if (typeof getBatchSponsorshipStatus === 'function') {
       getBatchSponsorshipStatus(jobIds).then(function (statuses) {
         var updated = false;
-        for (var i = 0; i < _currentResults.length; i++) {
-          var job = _currentResults[i];
-          if (statuses[job.id] && statuses[job.id].status) {
+        for (var index = 0; index < _currentResults.length; index++) {
+          var job = _currentResults[index];
+          if (statuses[job.id] && statuses[job.id].status &&
+              job.sponsorship !== statuses[job.id].status) {
             job.sponsorship = statuses[job.id].status;
             updated = true;
           }
@@ -475,10 +520,8 @@
     var container = document.getElementById('trackerEntries');
     if (!container) return;
 
-    var html = renderTrackerDashboard(entries);
-    container.innerHTML = html;
-
-    // Attach correct/dismiss listeners
+    var dashboard = renderTrackerDashboard(entries);
+    container.replaceChildren(dashboard);
     attachTrackerEntryListeners();
   }
 
@@ -542,7 +585,7 @@
   function showTrackerError(message) {
     var container = document.getElementById('trackerEntries');
     if (container) {
-      container.innerHTML = '<p class="tracker-error">❌ ' + escapeHtml(message) + '</p>';
+      replaceWithTextState(container, 'p', 'tracker-error', '❌ ' + message);
     }
   }
 
@@ -564,48 +607,84 @@
 
   // ===== SCAN SCHEDULE =====
   function startScanSchedule() {
-    stopScanSchedule();
-    // Poll every 15 minutes (900000 ms)
-    _scanInterval = setInterval(function () {
-      handleScanNow();
-    }, 900000);
+    sendScheduleMessage('START_GMAIL_SCHEDULE');
   }
 
   function stopScanSchedule() {
-    if (_scanInterval) {
-      clearInterval(_scanInterval);
-      _scanInterval = null;
+    sendScheduleMessage('STOP_GMAIL_SCHEDULE');
+  }
+
+  function sendScheduleMessage(messageType) {
+    if (!chrome.runtime || typeof chrome.runtime.sendMessage !== 'function') return;
+    var runtimeMessage = createScheduleMessage(messageType);
+    var response = chrome.runtime.sendMessage(runtimeMessage);
+    if (response && typeof response.catch === 'function') {
+      response.catch(function () { /* Background scheduling is best-effort. */ });
     }
+  }
+
+  function createScheduleMessage(messageType) {
+    if (typeof MessageProtocol !== 'undefined' && MessageProtocol) {
+      if (typeof MessageProtocol.createMessage === 'function') {
+        return MessageProtocol.createMessage(messageType);
+      }
+      if (typeof MessageProtocol.create === 'function') {
+        return MessageProtocol.create(messageType);
+      }
+    }
+    return { type: messageType };
   }
 
   // ===== HELPERS =====
   function getSelectedBoards() {
     var boards = [];
     var checkboxes = document.querySelectorAll('.board-checkbox input[type="checkbox"]');
-    checkboxes.forEach(function (cb) {
-      if (cb.checked) boards.push(cb.value);
+    checkboxes.forEach(function (checkbox) {
+      if (checkbox.checked) boards.push(checkbox.value);
     });
     return boards;
   }
 
   function showFailedBoardsWarning(failedBoards) {
     var resultsContainer = document.getElementById('jobResults');
-    if (!resultsContainer) return;
+    if (!resultsContainer || !Array.isArray(failedBoards) || failedBoards.length === 0) return;
 
-    var names = failedBoards.map(function (fb) { return fb.board; }).join(', ');
-    var warning = '<div class="job-results-warning">⚠️ Some boards failed: ' + escapeHtml(names) + '. Results shown from available boards.</div>';
-
-    resultsContainer.insertAdjacentHTML('afterbegin', warning);
+    var names = failedBoards.map(function (failedBoard) {
+      return String((failedBoard && failedBoard.board) || 'Unknown board');
+    }).join(', ');
+    var warning = createTextElement(
+      'div',
+      'job-results-warning',
+      '⚠️ Some boards failed: ' + names + '. Results shown from available boards.'
+    );
+    resultsContainer.prepend(warning);
   }
 
-  function escapeHtml(str) {
-    if (!str) return '';
-    return String(str)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;')
-      .replace(/'/g, '&#039;');
+  function createTextElement(tagName, className, text) {
+    var element = document.createElement(tagName);
+    element.className = className;
+    element.textContent = String(text || '');
+    return element;
+  }
+
+  function replaceWithTextState(container, tagName, className, text) {
+    container.replaceChildren(createTextElement(tagName, className, text));
+  }
+
+  function getAllowedHttpsUrl(rawUrl, allowedHosts) {
+    if (typeof rawUrl !== 'string' || !rawUrl.trim()) return '';
+
+    try {
+      var parsedUrl = new URL(rawUrl);
+      if (parsedUrl.protocol !== 'https:' || parsedUrl.username || parsedUrl.password) return '';
+      var hostname = parsedUrl.hostname.toLowerCase();
+      var isAllowed = allowedHosts.some(function (allowedHost) {
+        return hostname === allowedHost || hostname.endsWith('.' + allowedHost);
+      });
+      return isAllowed ? parsedUrl.href : '';
+    } catch (error) {
+      return '';
+    }
   }
 
 })();

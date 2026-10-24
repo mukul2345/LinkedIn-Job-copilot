@@ -3,7 +3,7 @@
 // eslint-disable-next-line no-var
 var APP_NAME = 'JobPilot AI';
 // eslint-disable-next-line no-var
-var APP_VERSION = '1.3.0';
+var APP_VERSION = '2.0.0';
 
 // User roles (stored in Firestore users collection)
 // eslint-disable-next-line no-var

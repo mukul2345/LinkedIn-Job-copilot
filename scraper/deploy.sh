@@ -1,53 +1,55 @@
-#!/bin/bash
-# Deploy the JobPilot scraper service to Google Cloud Run.
+#!/usr/bin/env bash
 #
-# Prerequisites:
-#   1. Install gcloud CLI: https://cloud.google.com/sdk/docs/install
-#   2. Authenticate: gcloud auth login
-#   3. Set project: gcloud config set project linkedin-jobcopilot
-#   4. Enable Cloud Run API: gcloud services enable run.googleapis.com
+# Deploy the JobPilot scraper to Cloud Run and wire the Cloud Function to it.
+#
+# Prereqs: gcloud CLI authenticated, project selected, billing enabled.
 #
 # Usage:
-#   cd scraper/
-#   chmod +x deploy.sh
-#   ./deploy.sh
+#   ./deploy.sh                 # uses defaults below
+#   PROJECT_ID=my-proj ./deploy.sh
 #
-# After deployment, copy the Service URL and set it as SCRAPER_SERVICE_URL in functions/.env
+set -euo pipefail
 
-set -e
+PROJECT_ID="${PROJECT_ID:-linkedin-jobcopilot}"
+REGION="${REGION:-us-central1}"
+SERVICE_NAME="${SERVICE_NAME:-jobpilot-scraper}"
 
-PROJECT_ID="linkedin-jobcopilot"
-REGION="us-central1"
-SERVICE_NAME="jobpilot-scraper"
+# Service account that the Cloud Function runs as (default App Engine SA).
+FUNCTION_SA="${FUNCTION_SA:-${PROJECT_ID}@appspot.gserviceaccount.com}"
 
-echo "🚀 Deploying JobPilot Scraper to Cloud Run..."
-echo "   Project: $PROJECT_ID"
-echo "   Region:  $REGION"
-echo "   Service: $SERVICE_NAME"
-echo ""
-
-gcloud run deploy "$SERVICE_NAME" \
+echo "==> Deploying ${SERVICE_NAME} to Cloud Run (project=${PROJECT_ID}, region=${REGION})"
+gcloud run deploy "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" \
   --source . \
-  --project "$PROJECT_ID" \
-  --region "$REGION" \
+  --region "${REGION}" \
+  --platform managed \
   --memory 512Mi \
   --cpu 1 \
   --timeout 120 \
   --min-instances 0 \
-  --max-instances 2 \
-  --no-allow-unauthenticated \
-  --set-env-vars "PYTHONUNBUFFERED=1"
+  --max-instances 3 \
+  --no-allow-unauthenticated
+
+# Allow the Cloud Function's service account to invoke this private service.
+echo "==> Granting run.invoker to ${FUNCTION_SA}"
+gcloud run services add-iam-policy-binding "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" \
+  --region "${REGION}" \
+  --member="serviceAccount:${FUNCTION_SA}" \
+  --role="roles/run.invoker"
+
+SERVICE_URL="$(gcloud run services describe "${SERVICE_NAME}" \
+  --project "${PROJECT_ID}" --region "${REGION}" --format='value(status.url)')"
 
 echo ""
-echo "✅ Deployment complete!"
+echo "==> Deployed: ${SERVICE_URL}"
 echo ""
-echo "📋 Next steps:"
-echo "   1. Copy the Service URL from above"
-echo "   2. Set SCRAPER_SERVICE_URL in functions/.env"
-echo "   3. Grant Cloud Functions permission to invoke this service:"
-echo "      gcloud run services add-iam-policy-binding $SERVICE_NAME \\"
-echo "        --region=$REGION \\"
-echo "        --member='serviceAccount:$PROJECT_ID@appspot.gserviceaccount.com' \\"
-echo "        --role='roles/run.invoker'"
-echo ""
-echo "   4. Redeploy Cloud Functions: cd ../functions && firebase deploy --only functions"
+echo "Next steps:"
+echo "  1. Set SCRAPER_SERVICE_URL in functions/.env:"
+echo "       SCRAPER_SERVICE_URL=${SERVICE_URL}"
+echo "  2. Redeploy the Cloud Functions:  firebase deploy --only functions"
+echo "  3. Smoke test:"
+echo "       curl -s -H \"Authorization: Bearer \$(gcloud auth print-identity-token)\" \\"
+echo "            -H 'Content-Type: application/json' \\"
+echo "            -d '{\"query\":\"software developer\",\"boards\":[\"indeed\"]}' \\"
+echo "            ${SERVICE_URL}/scrape | head -c 500"

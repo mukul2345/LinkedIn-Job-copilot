@@ -1,16 +1,16 @@
-# LinkedIn Auto Job Applier - Browser Extension
+# JobPilot AI - Multi-Platform Job Assistant
 
-A Chrome/Comet browser extension that automatically applies to LinkedIn Easy Apply jobs based on your configured preferences.
+A Chromium browser extension for user-configured job discovery, matching, application assistance, and history across supported job platforms. LinkedIn Easy Apply is the current direct-application adapter; Indeed and Glassdoor are supported for search and human-reviewed external applications.
 
 ## Features
 
 - **No Python/Selenium required** - Runs directly in your browser
 - **Simple setup** - Configure through the extension popup UI
-- **Smart form filling** - Automatically answers Easy Apply questions
+- **Fact-grounded form preparation** - Fills only answers resolved from saved candidate facts
 - **Job filtering** - Skip jobs based on keywords, experience, and company blacklists
-- **Review mode** - Optionally pause before each submission for manual review
-- **Application history** - Track all applied jobs with CSV export
-- **AI support** (optional) - Use OpenAI/Gemini/DeepSeek for unknown questions
+- **Mandatory final review** - Every LinkedIn submission requires explicit confirmation
+- **Confirmed application history** - Server-owned records distinguish submission from opening/review
+- **AI support** (optional) - Backend-only AI produces review drafts; unknown facts stay blank
 
 ## Installation
 
@@ -40,7 +40,8 @@ A Chrome/Comet browser extension that automatically applies to LinkedIn Easy App
    - Search for each of your configured search terms
    - Filter and skip irrelevant jobs
    - Click Easy Apply and fill out forms automatically
-   - Submit applications (or pause for review if configured)
+   - Stop for unresolved fields, legal consent, or verification challenges
+   - Require your explicit review before every final submission
 
 ## Configuration Guide
 
@@ -63,13 +64,13 @@ A Chrome/Comet browser extension that automatically applies to LinkedIn Easy App
 - Cover letter and professional summary
 
 ### Settings Tab
-- **Pause before submit** - Review each application before submitting
+- **Final review** - Required before every LinkedIn submission and cannot be disabled
 - **Click gap** - Delay between actions (increase if getting rate-limited)
-- **AI settings** - Optional AI for answering unknown questions
+- **AI settings** - Optional backend assistance; suggestions never supply unknown candidate facts
 
 ## Tips
 
-- Start with "Pause before submit" enabled to verify the bot fills forms correctly
+- Review every prepared form carefully before confirming submission
 - Keep your LinkedIn session active (don't log out in another tab)
 - If the bot gets stuck, click "Stop" and restart
 - Export your application history regularly as a backup

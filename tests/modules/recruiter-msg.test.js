@@ -1,11 +1,13 @@
 // tests/modules/recruiter-msg.test.js - Unit tests for recruiter-msg.js
 
-const { loadModules } = require('../helpers/load-modules');
+const { loadModules, loadModuleByPath } = require('../helpers/load-modules');
 
 beforeAll(() => {
+  loadModuleByPath('modules/database/usage-repository.js');
   loadModules([
     'utils.js',
     'selectors.js',
+    'safety.js',
     'hr-outreach.js',
     'recruiter-msg.js',
   ]);
@@ -15,9 +17,17 @@ beforeEach(() => {
   resetChromeMocks();
   document.body.innerHTML = '';
   jest.spyOn(console, 'log').mockImplementation();
+  jest.spyOn(global, 'sleep').mockResolvedValue();
+  global.consumeQuota = jest.fn().mockResolvedValue({
+    allowed: true,
+    used: 1,
+    limit: 10,
+    plan: 'free',
+  });
 });
 
 afterEach(() => {
+  delete global.consumeQuota;
   jest.restoreAllMocks();
 });
 
@@ -27,52 +37,46 @@ describe('buildRecruiterMessage()', () => {
     firstName: 'John',
     lastName: 'Doe',
     yearsOfExperience: '4',
+    templates: {
+      recruiterMessage:
+        'Hi {name}, I am interested in the {jobTitle} role at {company}. ' +
+        'I have {experience}+ years of experience. Regards, {myName}',
+    },
   };
 
-  it('should include recruiter first name', () => {
-    const msg = buildRecruiterMessage('Jane Smith', 'Backend Developer', 'TechCorp', config);
-    expect(msg).toContain('Hi Jane');
+  it('should render every configured placeholder', () => {
+    const message = buildRecruiterMessage(
+      'Jane Smith',
+      'Backend Developer',
+      'TechCorp',
+      config
+    );
+
+    expect(message).toContain('Hi Jane Smith');
+    expect(message).toContain('Backend Developer');
+    expect(message).toContain('TechCorp');
+    expect(message).toContain('4+ years');
+    expect(message).toContain('John Doe');
   });
 
-  it('should include job title', () => {
-    const msg = buildRecruiterMessage('Jane Smith', 'Senior Engineer', 'TechCorp', config);
-    expect(msg).toContain('Senior Engineer');
+  it('should use the configured HR template when recruiter template is absent', () => {
+    const message = buildRecruiterMessage('Jane', 'Dev', 'Corp', {
+      templates: { hrMessage: 'Hello {name} about {jobTitle} at {company}.' },
+    });
+
+    expect(message).toBe('Hello Jane about Dev at Corp.');
   });
 
-  it('should include company name', () => {
-    const msg = buildRecruiterMessage('Jane Smith', 'Developer', 'Google', config);
-    expect(msg).toContain('Google');
+  it('should return null when no user template is configured', () => {
+    expect(buildRecruiterMessage('Jane', 'Dev', 'Corp', {})).toBeNull();
   });
 
-  it('should include years of experience from config', () => {
-    const msg = buildRecruiterMessage('Jane', 'Dev', 'Corp', config);
-    expect(msg).toContain('4+');
-  });
+  it('should leave unavailable values unresolved for validation by the caller', () => {
+    const message = buildRecruiterMessage('Jane', 'Dev', 'Corp', {
+      templates: { recruiterMessage: 'Experience: {experience}' },
+    });
 
-  it('should include sender full name', () => {
-    const msg = buildRecruiterMessage('Jane', 'Dev', 'Corp', config);
-    expect(msg).toContain('John Doe');
-  });
-
-  it('should default to 3 years if not configured', () => {
-    const msg = buildRecruiterMessage('Jane', 'Dev', 'Corp', { firstName: 'Test', lastName: 'User' });
-    expect(msg).toContain('3+');
-  });
-
-  it('should handle single-word recruiter name', () => {
-    const msg = buildRecruiterMessage('Hiring Manager', 'Dev', 'Corp', config);
-    expect(msg).toContain('Hi Hiring');
-  });
-
-  it('should produce a multi-line message', () => {
-    const msg = buildRecruiterMessage('Jane', 'Dev', 'Corp', config);
-    expect(msg.split('\n').length).toBeGreaterThan(3);
-  });
-
-  it('should end with sender name', () => {
-    const msg = buildRecruiterMessage('Jane', 'Dev', 'Corp', config);
-    const lines = msg.split('\n').filter(l => l.trim());
-    expect(lines[lines.length - 1]).toContain('John Doe');
+    expect(findUnresolvedPlaceholders(message)).toEqual(['experience']);
   });
 });
 
@@ -82,6 +86,9 @@ describe('messageRecruiter()', () => {
     firstName: 'John',
     lastName: 'Doe',
     yearsOfExperience: '3',
+    templates: {
+      recruiterMessage: 'Hi {name}, I am interested in {jobTitle} at {company}. — {myName}',
+    },
   };
 
   it('should log info if no recruiter Message button found', async () => {
@@ -97,7 +104,7 @@ describe('messageRecruiter()', () => {
     // Should have logged that no button was found
     expect(chrome.runtime.sendMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        type: 'log',
+        type: 'LOG',
         message: expect.stringContaining('No recruiter Message button found'),
       })
     );
@@ -164,4 +171,71 @@ describe('messageRecruiter()', () => {
     // Should not throw even if message input is not found
     await expect(messageRecruiter('Dev', 'Corp', config)).resolves.not.toThrow();
   }, 30000);
+});
+
+
+describe('messageRecruiter() quota and dedupe safeguards', () => {
+  const config = {
+    firstName: 'John',
+    lastName: 'Doe',
+    templates: {
+      recruiterMessage: 'Hi {name}, interested in {jobTitle} at {company}. — {myName}',
+    },
+  };
+
+  function renderMessagingPage() {
+    document.body.innerHTML = `
+      <section>
+        <div>
+          <span>Job poster</span>
+          <a href="https://www.linkedin.com/in/jane"><span>Jane Recruiter</span></a>
+          <button id="open-message">Message</button>
+        </div>
+      </section>
+      <div class="msg-form__contenteditable" contenteditable="true" role="textbox"></div>
+      <button id="send-message" class="msg-form__send-button">Send</button>
+    `;
+  }
+
+  it('should not show an upgrade prompt when quota verification is unavailable', async () => {
+    renderMessagingPage();
+    global.consumeQuota.mockResolvedValue({
+      allowed: false,
+      used: 0,
+      limit: 0,
+      plan: 'unknown',
+      errorCode: 'QUOTA_UNAVAILABLE',
+    });
+    const sendButton = document.getElementById('send-message');
+    const sendClick = jest.spyOn(sendButton, 'click');
+
+    await messageRecruiter('Developer', 'TechCorp', config, 'job-1');
+
+    expect(sendClick).not.toHaveBeenCalled();
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({
+      type: 'notification',
+      message: expect.stringContaining('Unable to verify outreach quota'),
+    });
+    expect(chrome.runtime.sendMessage).not.toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining('Upgrade to Pro') })
+    );
+  });
+
+  it('should skip a recruiter already contacted for the same job before consuming quota', async () => {
+    renderMessagingPage();
+    setMockStorageData({
+      outreachLog: {
+        'https://www.linkedin.com/in/jane::job-1': {
+          date: new Date().toISOString(),
+        },
+      },
+    });
+    const openButton = document.getElementById('open-message');
+    const openClick = jest.spyOn(openButton, 'click');
+
+    await messageRecruiter('Developer', 'TechCorp', config, 'job-1');
+
+    expect(openClick).not.toHaveBeenCalled();
+    expect(global.consumeQuota).not.toHaveBeenCalled();
+  });
 });

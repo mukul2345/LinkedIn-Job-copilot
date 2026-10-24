@@ -5,6 +5,8 @@ const path = require('path');
 
 beforeAll(() => {
   // Load dependencies first (validators provides validateResumeFile, api-client provides ApiError, callBackend, getAuthToken, generateRequestId, API_BASE_URL)
+  loadFile(path.resolve(__dirname, '../../extension/core/runtime-config.js'));
+  loadFile(path.resolve(__dirname, '../../extension/modules/shared/message-protocol.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/shared/validators.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/shared/api-client.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/resume/resume-service.js'));

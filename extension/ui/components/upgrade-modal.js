@@ -13,28 +13,42 @@ function showUpgradeModal(reason, current, limit) {
 
   const modal = document.createElement('div');
   modal.id = 'jp-upgrade-modal';
-  modal.innerHTML = `
-    <div class="jp-upgrade-overlay">
-      <div class="jp-upgrade-card">
-        <button class="jp-upgrade-close" id="jp-upgrade-close">✕</button>
-        <div class="jp-upgrade-icon">⚡</div>
-        <h2>Upgrade to Pro</h2>
-        <p class="jp-upgrade-reason">${reason}</p>
-        <div class="jp-upgrade-stats">
-          <span>Today: ${current}/${limit}</span>
-        </div>
-        <ul class="jp-upgrade-features">
-          <li>✓ Unlimited job applications</li>
-          <li>✓ Unlimited HR messages</li>
-          <li>✓ AI-powered form answers</li>
-          <li>✓ Unlimited search terms</li>
-        </ul>
-        <p class="jp-upgrade-price">Starting at <strong>₹299/month</strong></p>
-        <button class="jp-upgrade-btn" id="jp-upgrade-btn">View Plans →</button>
-        <p class="jp-upgrade-skip" id="jp-upgrade-skip">Continue with free limits</p>
-      </div>
-    </div>
-  `;
+  const overlay = document.createElement('div');
+  overlay.className = 'jp-upgrade-overlay';
+  const card = document.createElement('div');
+  card.className = 'jp-upgrade-card';
+
+  const appendTextElement = (tagName, className, text) => {
+    const element = document.createElement(tagName);
+    element.className = className;
+    element.textContent = text;
+    card.appendChild(element);
+    return element;
+  };
+
+  const closeButton = appendTextElement('button', 'jp-upgrade-close', '✕');
+  closeButton.id = 'jp-upgrade-close';
+  appendTextElement('div', 'jp-upgrade-icon', '⚡');
+  appendTextElement('h2', '', 'Upgrade to Pro');
+  appendTextElement('p', 'jp-upgrade-reason', String(reason || 'Plan limit reached.'));
+  const stats = appendTextElement('div', 'jp-upgrade-stats', `This month: ${Number(current) || 0}/${String(limit ?? '—')}`);
+  stats.setAttribute('aria-label', 'Current plan usage');
+  const featureList = document.createElement('ul');
+  featureList.className = 'jp-upgrade-features';
+  ['More job applications', 'More HR messages', 'AI-powered draft assistance', 'More search terms']
+    .forEach(feature => {
+      const item = document.createElement('li');
+      item.textContent = `✓ ${feature}`;
+      featureList.appendChild(item);
+    });
+  card.appendChild(featureList);
+  appendTextElement('p', 'jp-upgrade-price', 'View available plans and pricing.');
+  const upgradeButton = appendTextElement('button', 'jp-upgrade-btn', 'View Plans →');
+  upgradeButton.id = 'jp-upgrade-btn';
+  const skipButton = appendTextElement('p', 'jp-upgrade-skip', 'Continue with free limits');
+  skipButton.id = 'jp-upgrade-skip';
+  overlay.appendChild(card);
+  modal.appendChild(overlay);
 
   // Add styles
   const style = document.createElement('style');
@@ -143,7 +157,7 @@ function showUpgradeModal(reason, current, limit) {
   document.getElementById('jp-upgrade-skip').addEventListener('click', removeUpgradeModal);
   document.getElementById('jp-upgrade-btn').addEventListener('click', () => {
     // Open extension popup to pricing tab
-    chrome.runtime.sendMessage({ type: 'openPricing' });
+    chrome.runtime.sendMessage(MessageProtocol.create(MessageType.OPEN_PRICING));
     removeUpgradeModal();
   });
 }

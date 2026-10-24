@@ -32,4 +32,5 @@ functions/.env
 functions/.env
 
 # Build artifacts
+dist/
 jobpilot-extension.zip

@@ -22,7 +22,9 @@ async function startHROutreach(state) {
   }
 
   const dailyLimit = templates.hrDailyLimit || config.hrDailyLimit || 25;
-  const delayBetween = Math.max((templates.hrDelayBetween || config.hrDelayBetween || 30), 15) * 1000;
+  const configuredMessageDelay = Number(templates.hrDelayBetween || config.hrDelayBetween || 0) * 1000;
+  const minimumMessageDelay = LINKEDIN_SAFETY_LIMITS.minDelay.betweenMessages * 1000;
+  const delayBetween = Math.max(configuredMessageDelay, minimumMessageDelay);
 
   // Get already messaged HRs to avoid duplicates
   const messagedHRs = config.messagedHRs || [];
@@ -75,14 +77,8 @@ async function startHROutreach(state) {
       if (state.hrStopRequested || sentCount >= dailyLimit) break;
 
       try {
-        // Check usage limit before processing
-        const limitCheck = await canPerformAction('hrMessages');
-        if (!limitCheck.allowed) {
-          log(limitCheck.reason, 'warning');
-          showUpgradeModal(limitCheck.reason, limitCheck.current, limitCheck.limit);
-          break; // Stop the loop — limit reached
-        }
-
+        // Quota is enforced server-side (checkAndConsumeQuota) at the moment of
+        // sending inside processHRCard, so the count can't be raced or bypassed.
         const result = await processHRCard(card, {
           messagedHRs,
           messageTemplate,
@@ -90,9 +86,23 @@ async function startHROutreach(state) {
           dailyLimit,
         });
 
+        if (result === 'quota_unavailable') {
+          const message = 'Unable to verify outreach quota. Check your connection and try again.';
+          log(message, 'error');
+          showSafetyAlert(message, 'danger');
+          state.hrStopRequested = true;
+          break;
+        }
+
+        if (result === 'limit_reached') {
+          log('Monthly outreach limit reached. Stopping HR outreach.', 'warning');
+          showUpgradeModal('Monthly outreach limit reached. Upgrade to Pro for more.', 0, 0);
+          state.hrStopRequested = true;
+          break; // Stop the loop — limit reached
+        }
+
         if (result === 'sent') {
           sentCount++;
-          await incrementHRMessageCount(); // Track usage for plan limits
           log(`[${sentCount}/${dailyLimit}] Message sent successfully.`, 'success');
 
           // Check if daily limit reached — stop immediately
@@ -214,7 +224,7 @@ async function processHRCard(card, context) {
   const firstName = name.split(' ')[0];
   const config = await getStorage(null);
   const myName = [config.firstName, config.lastName].filter(Boolean).join(' ') || 'Me';
-  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '3';
+  const experience = config.yearsOfExperience || config.profile?.yearsOfExperience || '';
   const headline = config.linkedinHeadline || config.profile?.linkedinHeadline || '';
 
   // Try to extract company from the person's card (subtitle/headline on the card)
@@ -235,13 +245,22 @@ async function processHRCard(card, context) {
     }
   }
 
-  const personalizedMsg = messageTemplate
-    .replace(/\{name\}/gi, firstName)
-    .replace(/\{myName\}/gi, myName)
-    .replace(/\{experience\}/gi, experience)
-    .replace(/\{headline\}/gi, headline)
-    .replace(/\{company\}/gi, personCompany)
-    .replace(/\{jobTitle\}/gi, '');  // Job title not available in HR search context
+  const personalizedMsg = renderTemplate(messageTemplate, {
+    name: firstName,
+    myName,
+    experience,
+    headline,
+    company: personCompany,
+    // Job title is not available in the HR people-search context.
+  });
+
+  // Abort if any {field} placeholder could not be resolved — never send a
+  // message that still contains raw template tokens.
+  const unresolved = findUnresolvedPlaceholders(personalizedMsg);
+  if (unresolved.length > 0) {
+    log(`HR message has unresolved placeholders (${unresolved.join(', ')}) for ${name}. Skipping.`, 'warning');
+    return 'skipped';
+  }
 
   // Click Message button
   actualMsgBtn.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -493,8 +512,10 @@ async function typeAndSendMessage(msgInput, message, name, profileUrl, messagedH
   if (!typed || typed === 'Write a message…' || typed === 'Write a message...') {
     log(`Message not typed for ${name}. Trying alternate method...`, 'warning');
 
-    // Alternate method 1: Set innerHTML with paragraph
-    parentEditable.innerHTML = `<p>${message}</p>`;
+    // Alternate method 1: construct a paragraph without interpreting message markup.
+    const messageParagraph = document.createElement('p');
+    messageParagraph.textContent = message;
+    parentEditable.replaceChildren(messageParagraph);
     parentEditable.dispatchEvent(new Event('input', { bubbles: true }));
     await sleep(500);
 
@@ -530,11 +551,31 @@ async function typeAndSendMessage(msgInput, message, name, profileUrl, messagedH
     return 'skipped';
   }
 
+  // Consume the monthly outreach quota (server-enforced) right before sending.
+  // Only send if allowed — fail closed if the quota service is unreachable.
+  const quota = await consumeQuota('outreach');
+  if (!quota.allowed) {
+    if (quota.errorCode) {
+      log('Unable to verify outreach quota. Stopping without sending.', 'error');
+      document.execCommand('selectAll', false, null);
+      document.execCommand('delete', false, null);
+      await closeMessageWindow();
+      return 'quota_unavailable';
+    }
+
+    log(`Monthly outreach limit reached (${quota.used}/${quota.limit} on ${quota.plan} plan).`, 'warning');
+    document.execCommand('selectAll', false, null);
+    document.execCommand('delete', false, null);
+    await closeMessageWindow();
+    return 'limit_reached';
+  }
+
   // Find and click Send button
   const sent = await clickSendButton(parentEditable, message);
 
   if (sent) {
     messagedHRs.push({ name, profileUrl, date: new Date().toISOString() });
+    await incrementHRMessageCount();
     log(`[Messaged] ${name}`, 'success');
     chrome.storage.local.set({ messagedHRs });
     await sleep(1000);

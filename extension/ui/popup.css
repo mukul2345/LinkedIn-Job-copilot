@@ -1390,3 +1390,47 @@ footer {
   opacity: 1;
   text-decoration: underline;
 }
+
+/* ===== AI-RANKED JOB REVIEW ===== */
+.job-matches-review {
+  margin-top: 18px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+
+.job-matches-status {
+  min-height: 18px;
+  margin-bottom: 10px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.job-matches-status.success { color: var(--success); }
+.job-matches-status.error { color: var(--danger); }
+.job-matches-status.info { color: var(--info); }
+
+.job-matches-results {
+  display: grid;
+  gap: 8px;
+}
+
+.job-match-review-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 8px;
+  align-items: start;
+  padding: 10px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.job-match-review-row input { accent-color: var(--accent); }
+.job-match-review-row small {
+  grid-column: 2;
+  color: var(--text-muted);
+  text-transform: lowercase;
+}

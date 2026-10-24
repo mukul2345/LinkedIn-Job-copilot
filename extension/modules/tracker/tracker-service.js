@@ -19,6 +19,36 @@ var TRACKER_STORAGE_KEYS = {
   trackerLastScan: 'trackerLastScan',
 };
 
+/** Return whether the extension manifest contains usable Gmail OAuth configuration. */
+function getGmailOAuthConfigurationError() {
+  if (!chrome.identity || typeof chrome.identity.getAuthToken !== 'function') {
+    return 'Gmail OAuth is unavailable because the Chrome Identity API is not configured for this extension.';
+  }
+  if (!chrome.runtime || typeof chrome.runtime.getManifest !== 'function') {
+    return 'Gmail OAuth is not configured. Add a valid oauth2 client_id and Gmail read-only scope to the extension manifest.';
+  }
+
+  var manifest = chrome.runtime.getManifest();
+  var oauth = manifest && manifest.oauth2;
+  var clientId = oauth && oauth.client_id;
+  var scopes = oauth && oauth.scopes;
+  var hasPlaceholder = typeof clientId !== 'string' || /[<>]|GOOGLE_CLIENT_ID/i.test(clientId);
+  var hasGmailScope = Array.isArray(scopes) && scopes.indexOf(GMAIL_OAUTH_SCOPE) !== -1;
+
+  if (hasPlaceholder || !hasGmailScope) {
+    return 'Gmail OAuth is not configured. Set a valid oauth2 client_id and Gmail read-only scope in the extension manifest.';
+  }
+  return null;
+}
+
+/** Return whether a tracker identifier is safe for storage, DOM attributes, and backend calls. */
+function isValidTrackerServiceEntryId(entryId) {
+  return typeof entryId === 'string' &&
+    entryId.length > 0 &&
+    entryId.length <= 128 &&
+    /^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(entryId);
+}
+
 /**
  * Initiate Gmail OAuth flow using chrome.identity.getAuthToken.
  * On success, stores the access token in chrome.storage.local and sets gmailConnected to true.
@@ -27,34 +57,37 @@ var TRACKER_STORAGE_KEYS = {
  * @returns {Promise<{success: boolean, error?: string}>}
  */
 async function connectGmail() {
+  var configurationError = getGmailOAuthConfigurationError();
+  if (configurationError) return { success: false, error: configurationError };
+
   try {
-    var token = await new Promise(function (resolve, reject) {
+    await new Promise(function (resolve, reject) {
       chrome.identity.getAuthToken({ interactive: true }, function (accessToken) {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
           return;
         }
         if (!accessToken) {
-          reject(new Error('No access token received from OAuth flow.'));
+          reject(new Error('No access token received from the Gmail OAuth flow.'));
           return;
         }
-        resolve(accessToken);
-      });
-    });
-
-    // Store token and connection state in chrome.storage.local
-    await new Promise(function (resolve) {
-      var data = {};
-      data[TRACKER_STORAGE_KEYS.gmailConnected] = true;
-      data[TRACKER_STORAGE_KEYS.gmailToken] = token;
-      chrome.storage.local.set(data, function () {
         resolve();
       });
     });
 
+    // Identity owns the access token; local storage retains connection state only.
+    await new Promise(function (resolve) {
+      var connectionState = {};
+      connectionState[TRACKER_STORAGE_KEYS.gmailConnected] = true;
+      chrome.storage.local.set(connectionState, resolve);
+    });
+    await new Promise(function (resolve) {
+      chrome.storage.local.remove(TRACKER_STORAGE_KEYS.gmailToken, resolve);
+    });
+
     return { success: true };
-  } catch (err) {
-    var errorMessage = (err && err.message) || 'Gmail connection failed. Please try again.';
+  } catch (error) {
+    var errorMessage = (error && error.message) || 'Gmail connection failed. Please try again.';
     return { success: false, error: errorMessage };
   }
 }
@@ -67,30 +100,26 @@ async function connectGmail() {
  * @returns {Promise<void>}
  */
 async function disconnectGmail() {
-  // First, read the current token to remove it from the identity cache
   var currentToken = await getGmailToken();
 
   if (currentToken) {
     await new Promise(function (resolve) {
-      chrome.identity.removeCachedAuthToken({ token: currentToken }, function () {
-        resolve();
-      });
+      chrome.identity.removeCachedAuthToken({ token: currentToken }, resolve);
     });
   }
 
-  // Clear all tracker-related storage
   await new Promise(function (resolve) {
     chrome.storage.local.set(
       {
         gmailConnected: false,
-        gmailToken: null,
         trackerEntries: [],
         trackerLastScan: null,
       },
-      function () {
-        resolve();
-      }
+      resolve
     );
+  });
+  await new Promise(function (resolve) {
+    chrome.storage.local.remove(TRACKER_STORAGE_KEYS.gmailToken, resolve);
   });
 }
 
@@ -109,64 +138,39 @@ async function isGmailConnected() {
 }
 
 /**
- * Retrieve the stored Gmail access token from chrome.storage.local.
- * Returns null if no token is stored.
+ * Retrieve the Gmail access token from Chrome Identity's in-memory cache.
+ * Access tokens are never persisted in extension storage.
  *
  * @returns {Promise<string|null>}
  */
 async function getGmailToken() {
+  if (!chrome.identity || typeof chrome.identity.getAuthToken !== 'function') return null;
+
   return new Promise(function (resolve) {
-    chrome.storage.local.get([TRACKER_STORAGE_KEYS.gmailToken], function (data) {
-      resolve(data[TRACKER_STORAGE_KEYS.gmailToken] || null);
+    chrome.identity.getAuthToken({ interactive: false }, function (accessToken) {
+      if (chrome.runtime.lastError || !accessToken) {
+        resolve(null);
+        return;
+      }
+      resolve(accessToken);
     });
   });
 }
 
 /**
- * Check the current Gmail token status by attempting a lightweight validation.
- * Uses chrome.identity.getAuthToken with interactive: false to silently check token validity.
+ * Check whether Chrome Identity can silently provide a current token.
+ * The token remains inside Chrome's identity cache and is never placed in a
+ * URL, extension storage, or application log.
  *
  * @returns {Promise<'valid'|'expired'|'revoked'>}
  */
 async function checkGmailTokenStatus() {
-  var connected = await isGmailConnected();
-  if (!connected) {
-    return 'revoked';
-  }
+  if (!(await isGmailConnected())) return 'revoked';
 
   try {
-    var token = await new Promise(function (resolve, reject) {
-      chrome.identity.getAuthToken({ interactive: false }, function (accessToken) {
-        if (chrome.runtime.lastError) {
-          reject(new Error(chrome.runtime.lastError.message));
-          return;
-        }
-        resolve(accessToken);
-      });
-    });
-
-    if (!token) {
-      return 'expired';
-    }
-
-    // Verify token is still valid by making a lightweight API call
-    var response = await fetch(
-      'https://www.googleapis.com/oauth2/v1/tokeninfo?access_token=' + encodeURIComponent(token)
-    );
-
-    if (response.status === 200) {
-      return 'valid';
-    } else if (response.status === 401) {
-      return 'revoked';
-    } else {
-      return 'expired';
-    }
-  } catch (err) {
-    // If we cannot get a token silently, it is likely expired
-    var errorMsg = (err && err.message) || '';
-    if (errorMsg.indexOf('revoked') !== -1 || errorMsg.indexOf('invalid') !== -1) {
-      return 'revoked';
-    }
+    var token = await getGmailToken();
+    return token ? 'valid' : 'expired';
+  } catch (error) {
     return 'expired';
   }
 }
@@ -198,29 +202,18 @@ async function handleTokenExpiry() {
  * @returns {Promise<void>}
  */
 async function handleTokenRevoked() {
-  // Clear stored token and mark as disconnected
   await new Promise(function (resolve) {
-    chrome.storage.local.set(
-      {
-        gmailConnected: false,
-        gmailToken: null,
-      },
-      function () {
-        resolve();
-      }
-    );
+    chrome.storage.local.set({ gmailConnected: false }, resolve);
+  });
+  await new Promise(function (resolve) {
+    chrome.storage.local.remove(TRACKER_STORAGE_KEYS.gmailToken, resolve);
   });
 
-  // Set badge to indicate re-auth needed
   await new Promise(function (resolve) {
-    chrome.action.setBadgeText({ text: '!' }, function () {
-      resolve();
-    });
+    chrome.action.setBadgeText({ text: '!' }, resolve);
   });
   await new Promise(function (resolve) {
-    chrome.action.setBadgeBackgroundColor({ color: '#EF4444' }, function () {
-      resolve();
-    });
+    chrome.action.setBadgeBackgroundColor({ color: '#EF4444' }, resolve);
   });
 }
 
@@ -245,7 +238,14 @@ async function clearTrackerBadge() {
 async function getTrackedApplications() {
   return new Promise(function (resolve) {
     chrome.storage.local.get([TRACKER_STORAGE_KEYS.trackerEntries], function (data) {
-      resolve(data[TRACKER_STORAGE_KEYS.trackerEntries] || []);
+      var entries = data[TRACKER_STORAGE_KEYS.trackerEntries];
+      if (!Array.isArray(entries)) {
+        resolve([]);
+        return;
+      }
+      resolve(entries.filter(function (entry) {
+        return entry && isValidTrackerServiceEntryId(entry.id);
+      }));
     });
   });
 }
@@ -261,45 +261,48 @@ async function getTrackedApplications() {
  * @returns {Promise<void>}
  */
 async function correctTrackerEntry(entryId, correction) {
+  if (!isValidTrackerServiceEntryId(entryId)) {
+    throw new TypeError('A valid tracker entry ID is required.');
+  }
+  if (!correction || typeof correction !== 'object') {
+    throw new TypeError('Tracker correction data is required.');
+  }
+
   var entries = await getTrackedApplications();
+  var entryExists = entries.some(function (entry) { return entry.id === entryId; });
+  if (!entryExists) throw new Error('Tracker entry was not found.');
 
   var updatedEntries = entries.map(function (entry) {
-    if (entry.id !== entryId) {
-      return entry;
-    }
+    if (entry.id !== entryId) return entry;
 
     var correctedEntry = Object.assign({}, entry);
-
     if (correction.status !== undefined) {
+      var validStatuses = ['interview', 'rejection', 'offer', 'unknown'];
+      if (validStatuses.indexOf(correction.status) === -1) {
+        throw new TypeError('Tracker status is invalid.');
+      }
       correctedEntry.status = correction.status;
       correctedEntry.manualCorrection = correction.status;
     }
     if (correction.dismissed !== undefined) {
-      correctedEntry.dismissed = correction.dismissed;
+      correctedEntry.dismissed = correction.dismissed === true;
     }
-
     return correctedEntry;
   });
 
-  // Persist updated entries locally
   await new Promise(function (resolve) {
-    var data = {};
-    data[TRACKER_STORAGE_KEYS.trackerEntries] = updatedEntries;
-    chrome.storage.local.set(data, function () {
-      resolve();
-    });
+    var storageUpdate = {};
+    storageUpdate[TRACKER_STORAGE_KEYS.trackerEntries] = updatedEntries;
+    chrome.storage.local.set(storageUpdate, resolve);
   });
 
-  // Sync correction to backend (fire-and-forget)
   try {
     await callBackend('correctTrackerEntry', {
       entryId: entryId,
       correction: correction,
     });
-  } catch (err) {
-    // Non-critical: local state is already updated.
-    // Backend sync will catch up on next scan.
-    console.warn('[JobPilot Tracker] Failed to sync correction to backend:', err && err.message);
+  } catch (error) {
+    console.warn('[JobPilot Tracker] Failed to sync correction to backend:', error && error.message);
   }
 }
 
@@ -312,13 +315,13 @@ async function correctTrackerEntry(entryId, correction) {
  */
 async function scanGmailNow() {
   var result = await callBackend('scanGmail', {});
+  var returnedEntries = result && (result.entries || result);
+  var newEntries = Array.isArray(returnedEntries) ? returnedEntries.filter(function (entry) {
+    return entry && isValidTrackerServiceEntryId(entry.id);
+  }) : [];
 
-  // result is expected to be an array of TrackerEntry from the backend
-  var newEntries = result.entries || result || [];
-
-  // Merge with existing local entries (avoid duplicates by ID)
   var existingEntries = await getTrackedApplications();
-  var existingIds = {};
+  var existingIds = Object.create(null);
   existingEntries.forEach(function (entry) {
     existingIds[entry.id] = true;
   });
@@ -326,18 +329,16 @@ async function scanGmailNow() {
   var mergedEntries = existingEntries.slice();
   newEntries.forEach(function (entry) {
     if (!existingIds[entry.id]) {
+      existingIds[entry.id] = true;
       mergedEntries.push(entry);
     }
   });
 
-  // Update local cache and last scan timestamp
   await new Promise(function (resolve) {
-    var data = {};
-    data[TRACKER_STORAGE_KEYS.trackerEntries] = mergedEntries;
-    data[TRACKER_STORAGE_KEYS.trackerLastScan] = Date.now();
-    chrome.storage.local.set(data, function () {
-      resolve();
-    });
+    var storageUpdate = {};
+    storageUpdate[TRACKER_STORAGE_KEYS.trackerEntries] = mergedEntries;
+    storageUpdate[TRACKER_STORAGE_KEYS.trackerLastScan] = Date.now();
+    chrome.storage.local.set(storageUpdate, resolve);
   });
 
   return mergedEntries;

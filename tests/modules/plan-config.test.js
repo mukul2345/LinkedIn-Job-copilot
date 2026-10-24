@@ -22,24 +22,24 @@ describe('PLANS', () => {
     expect(PLANS.pro.name).toBe('Pro');
   });
 
-  it('free plan should have limited applications per day', () => {
-    expect(PLANS.free.limits.applicationsPerDay).toBe(3);
+  it('free plan should allow 10 applications per month', () => {
+    expect(PLANS.free.limits.applicationsPerMonth).toBe(10);
   });
 
-  it('free plan should have limited HR messages per day', () => {
-    expect(PLANS.free.limits.hrMessagesPerDay).toBe(3);
+  it('free plan should allow 10 HR messages per month', () => {
+    expect(PLANS.free.limits.hrMessagesPerMonth).toBe(10);
   });
 
   it('free plan should not allow AI answers', () => {
     expect(PLANS.free.limits.aiAnswers).toBe(false);
   });
 
-  it('pro plan should have unlimited applications', () => {
-    expect(PLANS.pro.limits.applicationsPerDay).toBe(Infinity);
+  it('pro plan should allow 50 applications per month', () => {
+    expect(PLANS.pro.limits.applicationsPerMonth).toBe(50);
   });
 
-  it('pro plan should have unlimited HR messages', () => {
-    expect(PLANS.pro.limits.hrMessagesPerDay).toBe(Infinity);
+  it('pro plan should allow 50 HR messages per month', () => {
+    expect(PLANS.pro.limits.hrMessagesPerMonth).toBe(50);
   });
 
   it('pro plan should allow AI answers', () => {
@@ -97,25 +97,25 @@ describe('PRICING', () => {
 });
 
 describe('getPlanLimits()', () => {
-  it('should return free limits for "free"', () => {
+  it('should return monthly free limits for "free"', () => {
     const limits = getPlanLimits('free');
-    expect(limits.applicationsPerDay).toBe(3);
-    expect(limits.hrMessagesPerDay).toBe(3);
+    expect(limits.applicationsPerMonth).toBe(10);
+    expect(limits.hrMessagesPerMonth).toBe(10);
   });
 
-  it('should return pro limits for "pro"', () => {
+  it('should return monthly pro limits for "pro"', () => {
     const limits = getPlanLimits('pro');
-    expect(limits.applicationsPerDay).toBe(Infinity);
+    expect(limits.applicationsPerMonth).toBe(50);
   });
 
   it('should return free limits for unknown plan', () => {
     const limits = getPlanLimits('unknown');
-    expect(limits.applicationsPerDay).toBe(3);
+    expect(limits.applicationsPerMonth).toBe(10);
   });
 
   it('should return free limits for undefined', () => {
     const limits = getPlanLimits(undefined);
-    expect(limits.applicationsPerDay).toBe(3);
+    expect(limits.applicationsPerMonth).toBe(10);
   });
 });
 

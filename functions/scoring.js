@@ -16,13 +16,14 @@
  * 2. Reads job description(s) and user profile from Firestore
  * 3. Builds AI prompt evaluating 5 dimensions
  * 4. Parses AI response, normalizes score to [0, 100] integer
- * 5. Handles missing profile dimensions gracefully
+ * 5. Fails fast when no candidate dimensions are available
  * 6. Updates job documents with score results
  */
 
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
 const { COLLECTION_PATHS } = require('./lib/schema');
+const { callAI, parseJsonLoose } = require('./ai-provider');
 
 // Ensure admin is initialized (may already be from index.js)
 if (!admin.apps.length) {
@@ -42,6 +43,7 @@ const SCORING_DIMENSIONS = [
 ];
 
 const SCORING_TIMEOUT_MS = 10000; // 10s per job
+const MAX_CONCURRENT_SCORING_JOBS = 3;
 
 // ============================================================
 // Helpers (same patterns as search.js / visa.js)
@@ -86,23 +88,19 @@ function sendError(res, status, code, message, requestId) {
 // ============================================================
 
 /**
- * Normalize a raw score value to an integer in [0, 100].
- * Handles non-numbers, NaN, Infinity, floats, and out-of-range values.
+ * Normalize a finite model score to an integer in [0, 100].
+ * Invalid or out-of-range output is rejected instead of receiving a fallback.
  *
  * @param {*} rawScore - The raw score from AI response
- * @returns {number} Integer clamped to [0, 100]
+ * @returns {number} Rounded integer in [0, 100]
+ * @throws {Error} INVALID_AI_SCORE
  */
 function normalizeScore(rawScore) {
-  let score = Number(rawScore);
-
-  if (!Number.isFinite(score)) {
-    return 0;
+  const score = Number(rawScore);
+  if (!Number.isFinite(score) || score < 0 || score > 100) {
+    throw new Error('INVALID_AI_SCORE');
   }
-
-  score = Math.round(score);
-  score = Math.max(0, Math.min(100, score));
-
-  return score;
+  return Math.round(score);
 }
 
 // ============================================================
@@ -172,9 +170,14 @@ function detectProfileDimensions(profile) {
  * @returns {string} The constructed prompt
  */
 function buildFitScorePrompt(jobData, profile, availableDimensions) {
+  if (detectProfileDimensions(profile).available.length === 0) {
+    throw new Error('PROFILE_INCOMPLETE');
+  }
+
   const parts = [];
 
   parts.push('Evaluate how well this candidate matches the job posting.');
+  parts.push('Use only the supplied profile fields. Never infer or invent candidate facts.');
   parts.push('Score from 0 (no match) to 100 (perfect match).');
   parts.push('');
   parts.push('=== JOB POSTING ===');
@@ -208,8 +211,8 @@ function buildFitScorePrompt(jobData, profile, availableDimensions) {
   }
 
   if (availableDimensions.includes('salary')) {
-    const currency = profile.salaryCurrency || 'USD';
-    parts.push(`Salary Expectation: ${currency} ${profile.salaryMin} - ${profile.salaryMax}`);
+    const salaryRange = `${profile.salaryMin} - ${profile.salaryMax}`;
+    parts.push(`Salary Expectation: ${profile.salaryCurrency ? `${profile.salaryCurrency} ` : ''}${salaryRange}`);
   }
 
   parts.push('');
@@ -227,73 +230,34 @@ function buildFitScorePrompt(jobData, profile, availableDimensions) {
 }
 
 // ============================================================
-// AI Call (Placeholder)
+// Server-only AI scoring
 // ============================================================
 
 /**
- * Call the AI engine for scoring. Placeholder implementation that
- * simulates scoring based on keyword overlap.
- * Can be replaced with a real OpenAI/Gemini call later.
+ * Call the configured server AI provider and strictly validate its JSON output.
+ * Invalid or unavailable model output is an error, never a fabricated score.
  *
  * @param {string} prompt - The constructed scoring prompt
  * @returns {Promise<{score: number, explanation: string, dimensions_evaluated: string[], dimensions_missing: string[]}>}
  */
 async function callAIForScoring(prompt) {
-  // Extract job description and skills from the prompt for keyword overlap scoring
-  const descriptionMatch = prompt.match(/Description: ([\s\S]*?)(?=\n\n=== CANDIDATE|$)/);
-  const skillsMatch = prompt.match(/Skills: (.+)/);
-  const locationMatch = prompt.match(/Location: (.+)/);
-  const prefLocationsMatch = prompt.match(/Preferred Locations: (.+)/);
-
-  let score = 50; // Base score
-  const factors = [];
-
-  // Skills overlap scoring
-  if (skillsMatch && descriptionMatch) {
-    const skills = skillsMatch[1].split(',').map((s) => s.trim().toLowerCase());
-    const description = descriptionMatch[1].toLowerCase();
-    const matchedSkills = skills.filter((skill) => description.includes(skill));
-    const skillScore = skills.length > 0 ? (matchedSkills.length / skills.length) * 40 : 0;
-    score += skillScore;
-    if (matchedSkills.length > 0) {
-      factors.push(`${matchedSkills.length}/${skills.length} skills match the job requirements`);
-    }
+  const parsed = parseJsonLoose(await callAI(prompt, {
+    jsonMode: true,
+    maxTokens: 1000,
+    timeoutMs: SCORING_TIMEOUT_MS,
+  }));
+  const score = normalizeScore(parsed.score);
+  if (typeof parsed.explanation !== 'string' || !parsed.explanation.trim()) {
+    throw new Error('INVALID_AI_EXPLANATION');
   }
-
-  // Location overlap scoring
-  if (locationMatch && prefLocationsMatch) {
-    const jobLocation = locationMatch[1].toLowerCase().trim();
-    const preferredLocations = prefLocationsMatch[1]
-      .split(',')
-      .map((l) => l.trim().toLowerCase());
-    const locationMatches = preferredLocations.some(
-      (loc) => jobLocation.includes(loc) || loc.includes(jobLocation)
-    );
-    if (locationMatches) {
-      score += 10;
-      factors.push('Job location aligns with preferred locations');
-    }
-  }
-
-  // Clamp and round
-  score = Math.min(100, Math.max(0, Math.round(score)));
-
-  const explanation =
-    factors.length > 0
-      ? factors.join('. ') + '.'
-      : 'Score based on general profile-to-job alignment.';
-
-  // Extract evaluated dimensions from prompt
-  const evalMatch = prompt.match(/Evaluate ONLY these dimensions: (.+)/);
-  const dimensionsEvaluated = evalMatch
-    ? evalMatch[1].split(',').map((d) => d.trim())
+  const stringArray = value => Array.isArray(value)
+    ? value.filter(item => typeof item === 'string').map(item => item.trim()).filter(Boolean)
     : [];
-
   return {
     score,
-    explanation,
-    dimensions_evaluated: dimensionsEvaluated,
-    dimensions_missing: [],
+    explanation: parsed.explanation.trim().slice(0, 1000),
+    dimensions_evaluated: stringArray(parsed.dimensions_evaluated),
+    dimensions_missing: stringArray(parsed.dimensions_missing),
   };
 }
 
@@ -357,6 +321,22 @@ async function scoreSingleJob(userId, jobId, profile, dimensions) {
     }
     return { jobId, error: err.message || 'Scoring failed' };
   });
+}
+
+async function runWithConcurrency(items, worker, maximumConcurrency = MAX_CONCURRENT_SCORING_JOBS) {
+  const responses = new Array(items.length);
+  let nextIndex = 0;
+  async function runWorker() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex++;
+      responses[currentIndex] = await worker(items[currentIndex]);
+    }
+  }
+  await Promise.all(Array.from(
+    { length: Math.min(maximumConcurrency, items.length) },
+    () => runWorker()
+  ));
+  return responses;
 }
 
 // ============================================================
@@ -445,16 +425,20 @@ const computeFitScore = functions
     // --- Detect available dimensions ---
     const dimensions = detectProfileDimensions(profile);
 
-    // If no dimensions are available at all, still compute but note all excluded
     if (dimensions.available.length === 0) {
-      // Still proceed — the AI will produce a generic score based on the job description alone
-      dimensions.available = ['skills']; // Use a minimal default so prompt is meaningful
-      dimensions.missing = SCORING_DIMENSIONS.slice(); // All dimensions are missing
+      return sendError(
+        res,
+        422,
+        'PROFILE_INCOMPLETE',
+        'Add at least one professional profile dimension before scoring jobs.',
+        requestId
+      );
     }
 
     // --- Score jobs ---
-    const results = await Promise.all(
-      idsToProcess.map((id) => scoreSingleJob(userId, id, profile, dimensions))
+    const results = await runWithConcurrency(
+      idsToProcess,
+      id => scoreSingleJob(userId, id, profile, dimensions)
     );
 
     // Separate successes from errors
@@ -550,8 +534,13 @@ const recomputeScores = functions
     const dimensions = detectProfileDimensions(profile);
 
     if (dimensions.available.length === 0) {
-      dimensions.available = ['skills'];
-      dimensions.missing = SCORING_DIMENSIONS.slice();
+      return sendError(
+        res,
+        422,
+        'PROFILE_INCOMPLETE',
+        'Add at least one professional profile dimension before recomputing scores.',
+        requestId
+      );
     }
 
     // --- Fetch all cached jobs for user ---
@@ -581,8 +570,9 @@ const recomputeScores = functions
     }
 
     // --- Score all jobs ---
-    const results = await Promise.all(
-      jobIds.map((id) => scoreSingleJob(userId, id, profile, dimensions))
+    const results = await runWithConcurrency(
+      jobIds,
+      id => scoreSingleJob(userId, id, profile, dimensions)
     );
 
     const scores = [];
@@ -624,6 +614,8 @@ module.exports = {
   detectProfileDimensions,
   buildFitScorePrompt,
   callAIForScoring,
+  runWithConcurrency,
   SCORING_DIMENSIONS,
   SCORING_TIMEOUT_MS,
+  MAX_CONCURRENT_SCORING_JOBS,
 };

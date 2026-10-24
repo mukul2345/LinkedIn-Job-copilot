@@ -89,6 +89,37 @@ beforeEach(() => {
   document.dispatchEvent(new Event('DOMContentLoaded'));
 });
 
+describe('Tracker service security', () => {
+  it('should return a configuration error when manifest OAuth is unavailable', async () => {
+    delete chrome.runtime.getManifest;
+
+    const result = await connectGmail();
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Gmail OAuth is not configured');
+    expect(chrome.identity.getAuthToken).not.toHaveBeenCalled();
+  });
+
+  it('should keep Gmail access tokens out of local storage', async () => {
+    chrome.runtime.getManifest = jest.fn(() => ({
+      oauth2: {
+        client_id: 'configured-client.apps.googleusercontent.com',
+        scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      },
+    }));
+
+    const result = await connectGmail();
+
+    expect(result.success).toBe(true);
+    expect(chrome.storage.local.set).toHaveBeenCalledWith(
+      { gmailConnected: true },
+      expect.any(Function)
+    );
+    expect(chrome.storage.local.remove).toHaveBeenCalledWith('gmailToken', expect.any(Function));
+    delete chrome.runtime.getManifest;
+  });
+});
+
 describe('Jobs tab - search button', () => {
   it('should call searchJobs when search button is clicked', async () => {
     document.getElementById('jobSearchQuery').value = 'Backend Developer';
@@ -183,6 +214,26 @@ describe('Jobs tab - rendering results', () => {
     expect(results.innerHTML).toContain('Tailor Resume');
     expect(results.innerHTML).toContain('btn-tailor');
   });
+
+  it('should preserve failed-board warnings after rendering results', async () => {
+    global.searchJobs = jest.fn().mockResolvedValue({
+      jobs: [
+        { id: 'job1', title: 'Dev', company: 'Co', location: 'LA', url: '', sourceBoard: 'indeed' },
+      ],
+      total: 1,
+      failedBoards: [{ board: '<img src=x onerror=alert(1)>' }],
+    });
+    global.getBatchFitScores = jest.fn().mockResolvedValue({});
+    global.getBatchSponsorshipStatus = jest.fn().mockResolvedValue({});
+
+    document.getElementById('jobSearchBtn').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const results = document.getElementById('jobResults');
+    expect(results.querySelector('.job-results-warning')).not.toBeNull();
+    expect(results.querySelector('.job-card')).not.toBeNull();
+    expect(results.querySelector('img')).toBeNull();
+  });
 });
 
 describe('Jobs tab - pagination', () => {
@@ -202,6 +253,38 @@ describe('Jobs tab - pagination', () => {
     const pagination = document.getElementById('jobPagination');
     expect(pagination.style.display).toBe('none');
   });
+
+  it('should request the next backend page and enrich only returned jobs', async () => {
+    const pageOne = Array.from({ length: 20 }, (_, index) => ({
+      id: `job-${index + 1}`,
+      title: `Job ${index + 1}`,
+      company: 'Co',
+      location: 'Remote',
+      url: '',
+      sourceBoard: 'indeed',
+    }));
+    const pageTwo = [{
+      id: 'job-21', title: 'Job 21', company: 'Co', location: 'Remote', url: '', sourceBoard: 'indeed',
+    }];
+    global.searchJobs = jest.fn().mockImplementation(({ page }) => Promise.resolve(
+      page === 2
+        ? { jobs: pageTwo, total: 21, page: 2, totalPages: 2, failedBoards: [] }
+        : { jobs: pageOne, total: 21, page: 1, totalPages: 2, failedBoards: [] }
+    ));
+    global.getBatchFitScores = jest.fn().mockResolvedValue({});
+    global.getBatchSponsorshipStatus = jest.fn().mockResolvedValue({});
+
+    document.getElementById('jobSearchBtn').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    document.getElementById('jobNextPage').click();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(global.searchJobs).toHaveBeenLastCalledWith(expect.objectContaining({ page: 2 }));
+    expect(document.getElementById('jobPageInfo').textContent).toBe('Page 2 of 2');
+    expect(document.getElementById('jobResults').textContent).toContain('Job 21');
+    expect(global.getBatchFitScores).toHaveBeenLastCalledWith(['job-21']);
+    expect(global.getBatchSponsorshipStatus).toHaveBeenLastCalledWith(['job-21']);
+  });
 });
 
 describe('Tracker tab - Gmail connection', () => {
@@ -215,6 +298,7 @@ describe('Tracker tab - Gmail connection', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(global.connectGmail).toHaveBeenCalled();
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'START_GMAIL_SCHEDULE' });
   });
 
   it('should show dashboard after successful connection', async () => {
@@ -239,6 +323,7 @@ describe('Tracker tab - Gmail connection', () => {
     await new Promise((r) => setTimeout(r, 50));
 
     expect(global.disconnectGmail).toHaveBeenCalled();
+    expect(chrome.runtime.sendMessage).toHaveBeenCalledWith({ type: 'STOP_GMAIL_SCHEDULE' });
   });
 });
 

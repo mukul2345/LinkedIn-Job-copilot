@@ -18,11 +18,13 @@ var LINKEDIN_SAFETY_LIMITS = {
     warning: 35,     // Getting risky
     danger: 50,      // LinkedIn may restrict messaging
   },
-  // Minimum delay between actions (seconds)
+  // Minimum delay between actions (seconds). Kept low so the user's configured
+  // clickGap drives normal pace; escalation multipliers below still slow the
+  // bot down automatically as daily volume approaches the safe/warning limits.
   minDelay: {
-    betweenApps: 30,     // 30s minimum between applications
-    betweenMessages: 45, // 45s minimum between DMs
-    betweenPages: 5,     // 5s between page navigations
+    betweenApps: 3,      // 3s floor between applications (fast default)
+    betweenMessages: 20, // 20s minimum between DMs
+    betweenPages: 3,     // 3s between page navigations
   },
 };
 
@@ -93,11 +95,11 @@ async function getAdaptiveDelay(actionType, baseDelay) {
     delay = delay * 2;
   }
 
-  // Add randomization (±30%) to appear more human
+  // Add randomization (±30%) to appear more human without violating the minimum.
   const jitter = delay * 0.3;
   delay += (Math.random() * jitter * 2) - jitter;
 
-  return Math.round(delay);
+  return Math.max(minDelay, Math.round(delay));
 }
 
 /**
@@ -131,7 +133,7 @@ async function checkSubscriptionExpiry() {
     return {
       expiring: true,
       daysLeft: 0,
-      message: '⚠️ Your Pro plan has expired. You\'re now on the Free plan (3 apps/day). Renew to continue unlimited access.',
+      message: '⚠️ Your Pro plan has expired. The Free plan allows 10 confirmed direct LinkedIn submissions per month.',
     };
   }
 
@@ -149,7 +151,7 @@ async function checkSubscriptionExpiry() {
     return {
       expiring: true,
       daysLeft,
-      message: `🔔 Your Pro plan expires in ${daysLeft} days. Renew to keep unlimited access.`,
+      message: `🔔 Your Pro plan expires in ${daysLeft} days. Renew to retain the 50-per-month direct submission limit.`,
     };
   }
 

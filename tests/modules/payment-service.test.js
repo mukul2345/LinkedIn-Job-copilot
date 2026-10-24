@@ -8,8 +8,10 @@ global.fetch = jest.fn();
 // Mock getCurrentUser
 global.getCurrentUser = jest.fn();
 
+let defaultRuntimeConfig;
 beforeAll(() => {
   loadModules(['constants.js', 'plan-config.js', 'usage-repository.js', 'plan-service.js']);
+  defaultRuntimeConfig = global.RuntimeConfig;
   // Load payment-service manually since it's not in the content script path map
   const { loadModuleByPath } = require('../helpers/load-modules');
   loadModuleByPath('modules/subscription/payment-service.js');
@@ -19,6 +21,7 @@ beforeEach(() => {
   resetChromeMocks();
   fetch.mockClear();
   getCurrentUser.mockReturnValue(null);
+  global.RuntimeConfig = defaultRuntimeConfig;
 });
 
 describe('initiatePayment()', () => {
@@ -52,11 +55,32 @@ describe('initiatePayment()', () => {
           'Authorization': 'Bearer mock-id-token-123',
           'Content-Type': 'application/json',
         }),
-        body: JSON.stringify({ planId: 'monthly' }),
+        body: JSON.stringify({ planId: 'monthly', provider: 'cashfree' }),
       })
     );
     expect(result.success).toBe(true);
     expect(result.orderId).toBe('order_test_123');
+  });
+
+  it('should use RuntimeConfig for the payment API URL when available', async () => {
+    global.RuntimeConfig = {
+      getCloudFunctionsUrl: jest.fn(() => 'https://payments-api.example'),
+    };
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        orderId: 'order_runtime_config',
+        paymentLink: 'https://payments.cashfree.com/checkout/runtime',
+      }),
+    });
+
+    await initiatePayment(mockUser, mockPricing);
+
+    expect(fetch).toHaveBeenCalledWith(
+      'https://payments-api.example/createPaymentSession',
+      expect.any(Object)
+    );
   });
 
   it('should store pending payment in chrome.storage', async () => {
@@ -142,6 +166,39 @@ describe('initiatePayment()', () => {
     expect(chrome.tabs.create).toHaveBeenCalledWith({
       url: expect.stringContaining('session_xyz'),
     });
+  });
+
+  it('should fail when checkout order and redirect/session data are missing', async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true }),
+    });
+
+    const result = await initiatePayment(mockUser, mockPricing);
+
+    expect(result).toEqual({
+      success: false,
+      error: 'Payment checkout is missing the order ID.',
+    });
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
+    expect(chrome.storage.local.set).not.toHaveBeenCalled();
+  });
+
+  it('should reject a checkout redirect from an untrusted origin', async () => {
+    fetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        success: true,
+        orderId: 'order_untrusted',
+        paymentLink: 'https://evil.example/checkout',
+      }),
+    });
+
+    const result = await initiatePayment(mockUser, mockPricing);
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('allowed HTTPS origin');
+    expect(chrome.tabs.create).not.toHaveBeenCalled();
   });
 });
 

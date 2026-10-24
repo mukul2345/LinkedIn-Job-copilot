@@ -5,6 +5,8 @@ const path = require('path');
 
 beforeAll(() => {
   // Load dependencies first (validators provides validateSearchInput, api-client provides ApiError & callBackend)
+  loadFile(path.resolve(__dirname, '../../extension/core/runtime-config.js'));
+  loadFile(path.resolve(__dirname, '../../extension/modules/shared/message-protocol.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/shared/validators.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/shared/api-client.js'));
   loadFile(path.resolve(__dirname, '../../extension/modules/search/search-service.js'));
@@ -56,6 +58,21 @@ describe('searchJobs()', () => {
       location: 'NYC',
       jobType: 'full-time',
       datePosted: 'week',
+    });
+  });
+
+  it('includes the durable session ID for later snapshot pages', async () => {
+    await searchJobs({
+      query: 'Frontend Dev',
+      boards: ['glassdoor'],
+      page: 2,
+      searchSessionId: 'session-123',
+    });
+    expect(mockCallBackend).toHaveBeenCalledWith('searchJobs', {
+      query: 'Frontend Dev',
+      boards: ['glassdoor'],
+      page: 2,
+      searchSessionId: 'session-123',
     });
   });
 
@@ -123,10 +140,10 @@ describe('getSearchPreferences()', () => {
 
 // ===== saveSearchPreferences() =====
 describe('saveSearchPreferences()', () => {
-  it('persists boards to chrome.storage.local', async () => {
+  it('persists only boards supported by the production scraper', async () => {
     await saveSearchPreferences({ boards: ['glassdoor', 'naukri'] });
     expect(chrome.storage.local.set).toHaveBeenCalledWith(
-      expect.objectContaining({ searchPrefs_boards: ['glassdoor', 'naukri'] }),
+      expect.objectContaining({ searchPrefs_boards: ['glassdoor'] }),
       expect.any(Function)
     );
   });
@@ -139,10 +156,10 @@ describe('saveSearchPreferences()', () => {
     );
   });
 
-  it('persists both boards and lastQuery together', async () => {
+  it('drops unsupported boards while persisting the last query', async () => {
     await saveSearchPreferences({ boards: ['adzuna'], lastQuery: 'ML Engineer' });
     expect(chrome.storage.local.set).toHaveBeenCalledWith(
-      { searchPrefs_boards: ['adzuna'], searchPrefs_lastQuery: 'ML Engineer' },
+      { searchPrefs_boards: [], searchPrefs_lastQuery: 'ML Engineer' },
       expect.any(Function)
     );
   });
@@ -261,5 +278,26 @@ describe('paginateResults()', () => {
     expect(result.totalPages).toBe(1);
     expect(result.total).toBe(0);
     expect(result.page).toBe(1);
+  });
+});
+
+describe('saved search location', () => {
+  it('should persist and forward the saved user search location', async () => {
+    const backend = jest.fn().mockResolvedValue({ jobs: [], total: 0, failedBoards: [] });
+    global.callBackend = backend;
+
+    await searchJobs({
+      query: 'Platform Engineer',
+      boards: ['linkedin'],
+      location: 'Saved location',
+    });
+
+    expect(backend).toHaveBeenCalledWith('searchJobs', expect.objectContaining({
+      location: 'Saved location',
+    }));
+    expect(chrome.storage.local.set).toHaveBeenCalledWith(expect.objectContaining({
+      searchPrefs_location: 'Saved location',
+    }), expect.any(Function));
+    delete global.callBackend;
   });
 });
